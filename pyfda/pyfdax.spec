@@ -59,12 +59,17 @@ json_files = [(os.path.join(root, name),
                         if name.endswith(".json")]
 datas += json_files
 
+# pyfda reads its version via importlib.metadata, bundle the package metadata
+from PyInstaller.utils.hooks import copy_metadata
+datas += copy_metadata('pyfda')
+
 ## hiddenimports += ['html.parser'] # needed for markdown 3.3 compatibility
 ## hiddenimports += ['scipy.special.cython_special']
 ### Plot Widgets
 hiddenimports += [
     'pyfda.plot_widgets.plot_hf','pyfda.plot_widgets.plot_phi','pyfda.plot_widgets.plot_tau_g',
-    'pyfda.plot_widgets.plot_pz','pyfda.plot_widgets.plot_tran','pyfda.plot_widgets.plot_3d']
+    'pyfda.plot_widgets.plot_pz','pyfda.plot_widgets.plot_tran','pyfda.plot_widgets.plot_3d',
+    'pyfda.plot_widgets.plot_data_filt']
 ### Input Widgets
 hiddenimports += [
     'pyfda.input_widgets.input_specs','pyfda.input_widgets.input_coeffs',

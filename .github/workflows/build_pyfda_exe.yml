@@ -1,0 +1,48 @@
+# Build a Windows executable of pyfda (with the "Data Filt" tab) using PyInstaller.
+# The resulting pyfdax.exe is uploaded as the workflow artifact "pyfdax_win".
+name: build_pyfda_exe
+
+on:
+  push:
+    paths:
+      - 'pyfda/**'
+      - '.github/workflows/build_pyfda_exe.yml'
+  pull_request:
+    paths:
+      - 'pyfda/**'
+      - '.github/workflows/build_pyfda_exe.yml'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: pyfda
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pyinstaller-hooks-contrib
+          pip install . --no-deps
+
+      - name: Check that the data filter tab imports
+        run: python -c "import pyfda.plot_widgets.plot_data_filt as m; print(m.classes)"
+
+      - name: Build pyfdax.exe
+        run: pyinstaller pyfdax.spec
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyfdax_win
+          path: pyfda/dist/pyfdax.exe
+          if-no-files-found: error

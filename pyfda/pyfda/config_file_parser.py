@@ -333,6 +333,10 @@ class ConfigFileParser():
         # ------------------------------------------------------------------
         ConfigFileParser.PLOT_CLASSES_DICT =\
             self._build_widget_class_dict("Plot Widgets", "plot_widgets")
+        # Add the data filter tab when it is missing in an existing user config file
+        if 'PlotDataFilt' not in ConfigFileParser.PLOT_CLASSES_DICT:
+            ConfigFileParser.PLOT_CLASSES_DICT['PlotDataFilt'] =\
+                {'name': 'Data Filt', 'mod': 'pyfda.plot_widgets.plot_data_filt'}
         # ------------------------------------------------------------------
         # Parsing [Filter Widgets] -> filter_widgets
         # ------------------------------------------------------------------
