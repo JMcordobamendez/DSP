@@ -1,0 +1,638 @@
+# -*- coding: utf-8 -*-
+#
+# This file is part of the pyfda project hosted at https://github.com/chipmuenk/pyfda
+#
+# Copyright © pyfda Project Contributors
+# Licensed under the terms of the MIT License
+# (see file LICENSE in root directory for details)
+
+"""
+Library with various helper functions for Qt widgets
+"""
+import logging
+
+from pyfda.libs.pyfda_text_lib import pprint_log
+
+from pyfda.libs.compat import (
+    Qt, QtGui, QMessageBox, QComboBox, QDialog, QtWidgets, QFont, QFontMetrics)
+from pyfda.libs.pyfda_dirs import OS, OS_VER
+
+logger = logging.getLogger(__name__)
+
+DICT_SIG_KEYS = {'id', 'class', 'ttl', 'sender_name', 'object_name',
+                 'view_changed',   # view on the data (e.g. f_S) has changed
+                 'specs_changed',  # filter specs (corner freqs. etc.) have changed
+                 'data_changed',   # actual filter data (coeffs. etc.) has changed
+                 'filt_changed',   # the filter type (e.g. elliptic) has changed
+                 'ui_local_changed',  # some parameter in the local ui has changed
+                 'ui_global_changed', # this relates to resize, tab change or CSV options
+                 'fx_sim',         # parameters relating to fixpoint simulation
+                 'fxfilter_func',  # handle to filter function
+                 'close_event',    # propagate close event to finish some task upstream
+                 'mpl_toolbar'     # events triggered by the toolbar
+                }
+# ------------------------------------------------------------------------------
+def emit(self, dict_sig: dict | None = None, sig_name: str = '') -> None:
+    """
+    Emit a signal `self.<sig_name>` (defined as a class attribute) with a
+    dictionary `dict_sig` using Qt's `emit()`.
+
+    Parameters:
+    -----------
+    dict_sig : dict | None
+        Dictionary containing signal data. If None, an empty dictionary is used.
+    sig_name : str
+        Name of the signal to emit. Defaults to 'sig_tx'.
+
+    Returns:
+    --------
+    None
+    """
+
+    if sig_name == '':
+        sig_name = 'sig_tx'
+    if dict_sig is None:
+        dict_sig = {}
+    for k in dict_sig:
+        if k not in DICT_SIG_KEYS:
+            logger.warning(
+                "Unknown entry '%s':'%s' in 'dict_sig'!", k, dict_sig[k])
+            logger.warning("%s", pprint_log(dict_sig))
+    # if self.sender() and self.sender().objectName():
+    #     logger.info(f"this_sender_name: {self.sender().objectName()}")
+    # logger.info(f"objectName = {self.objectName()}")
+    if 'id' not in dict_sig:
+        dict_sig.update({'id': id(self)})
+    if 'class' not in dict_sig:
+        dict_sig.update({'class': self.__class__.__name__})
+    # Count down time-to-live counter and terminate the signal when ttl < 1
+    if 'ttl' in dict_sig:
+        if dict_sig['ttl'] < 1:
+            logger.warning("Terminated with ttl = 0")
+            return
+        dict_sig.update({'ttl': dict_sig['ttl'] - 1})
+    else:
+        dict_sig.update({'ttl': 10})
+    if 'sender_name' not in dict_sig and\
+        self.sender() and self.sender().objectName():
+        dict_sig.update({'sender_name': self.sender().objectName()})
+    if 'object_name' not in dict_sig:
+        dict_sig.update({'object_name': self.objectName()})
+
+    # logger.info(f"EMIT:{pprint_log(dict_sig)}")
+
+    # Get signal (default name: `sig_tx`) from calling instance and emit it
+    signal = getattr(self, sig_name)
+    signal.emit(dict_sig)
+
+
+# # ------------------------------------------------------------------------------
+# def sig_loop(self, dict_sig: dict, logger, **kwargs) -> int:
+#     """
+#     Test whether the signal has been emitted by self, leading to a possible
+#     infinite loop.
+#     """
+#     # if 'id' not in dict_sig:
+#     #     if kwargs:
+#     #         logger.error("id missing in {0}\n{1}"
+#     #                      .format(pprint_log(dict_sig), pprint_log(kwargs)))
+#     #     else:
+#     #         logger.error(f"id missing in {pprint_log(dict_sig)}")
+#     #     return 0
+
+#     if dict_sig['id'] == id(self):
+#         if kwargs:
+#             logger.warning("Stopped infinite loop:\n{0}\n{1}"
+#                            .format(pprint_log(dict_sig), pprint_log(kwargs)))
+#         else:
+#             logger.warning(f"Stopped infinite loop:\n{pprint_log(dict_sig)}")
+#         return 1
+#     else:
+#         return -1
+
+
+# ------------------------------------------------------------------------------
+def qwindow_stay_on_top(win: QDialog, top: bool) -> None:
+    """
+    Set the window flags to make a dialog stay on top or not.
+
+    On Windows 7 the new window stays on top anyway. Additionally setting WindowStaysOnTopHint
+    blocks the message window when trying to close pyfda.
+
+    On Windows 10 and Linux, `WindowStaysOnTopHint` needs to be set.
+
+    Parameters:
+    -----------
+    win : QDialog
+        The dialog window to modify.
+    top : bool
+        If True, the window stays on top; otherwise, it does not.
+
+    Returns:
+    --------
+    None
+    """
+
+    win_flags = (Qt.CustomizeWindowHint | Qt.Window |  # always needed
+                 Qt.WindowTitleHint |  # show title bar, make window movable
+                 Qt.WindowCloseButtonHint |  # show close button
+                 Qt.WindowContextHelpButtonHint |  # right Mousebutton context menu
+                 Qt.WindowMinMaxButtonsHint)  # show min/max buttons
+
+    if OS == "Windows" and OS_VER in {'XP', '7', 'Vista', '2008Server'} or not top:
+        win.setWindowFlags(win_flags)
+    else:
+        win.setWindowFlags(win_flags | Qt.WindowStaysOnTopHint)
+
+
+# ------------------------------------------------------------------------------
+def qcmb_box_populate(cmb_box: QComboBox, items_list: list, item_init: str) -> int:
+    """
+    Clear and populate combo box `cmb_box` with text, data and tooltip from the list
+    `items_list` with initial selection of `init_item` (data).
+
+    Text and tooltip are prepared for translation via `self.tr()`
+
+    Parameters
+    ----------
+    cmb_box: instance of QComboBox
+        Combobox to be populated
+    items_list: list
+        List of combobox entries, in the format
+        ["Tooltip for Combobox",
+        ("data 1st item", "text 1st item", "tooltip for 1st item"),
+        ("data 2nd item", "text 2nd item", "tooltip for 2nd item")]
+
+        Tooltipps are optional.
+
+    item_init: str
+        data for initial setting of combobox. When data is not found,
+        set combobox to first item.
+
+    Returns
+    -------
+    ret: int
+        Index of `item_init` in combobox. If index == -1, `item_init` was not in `items_list`
+    """
+    cmb_box.clear()
+    if isinstance(items_list[0], str):  # combo box tool tipp (optional)
+        cmb_box.setToolTip(cmb_box.tr(items_list[0]))
+        items_list.pop(0)  # remove tooltip from list of items
+    for i, item in enumerate(items_list):
+        if isinstance(item[1], QtGui.QIcon):
+            cmb_box.addItem("", item[0])
+            cmb_box.setItemIcon(i, item[1])
+        else:
+            cmb_box.addItem(cmb_box.tr(item[1]), item[0])
+        if len(item) == 3:  # add item tool tip (optional)
+            cmb_box.setItemData(i, cmb_box.tr(item[2]), Qt.ToolTipRole)
+    cmb_box.sizeAdjustPolicy = QComboBox.AdjustToContents
+
+    return qset_cmb_box(cmb_box, item_init, data=True)
+
+    # icon = QIcon('logo.png')
+    ## adding icon to the given index
+    # self.combo_box.setItemIcon(i, icon)
+    # size = QSize(10, 10)
+    # self.combo_box.setIconSize(size)
+
+# ------------------------------------------------------------------------------
+def qcmb_box_add_items(cmb_box: QComboBox, items_list: list) -> None:
+    """
+    Add items to combo box `cmb_box` with text, data and tooltip from the list
+    `items_list`.
+
+    Text and tooltip are prepared for translation via `self.tr()`
+
+    Parameters
+    ----------
+    cmb_box: instance of QComboBox
+        Combobox to be populated
+    items_list: list
+        List of combobox entries, in the format
+         ("data 1st item", "text 1st item", "tooltip for 1st item" # [optional]),
+         ("data 2nd item", "text 2nd item", "tooltip for 2nd item")]
+
+    Returns
+    -------
+    None
+    """
+    for i, item in enumerate(items_list):
+        if isinstance(item[1], QtGui.QIcon):
+            cmb_box.addItem("", item[0])
+            cmb_box.setItemIcon(i-1, item[1])
+        else:
+            cmb_box.addItem(cmb_box.tr(item[1]), item[0])
+        if len(item) == 3:  # add item tool tip (optional)
+            cmb_box.setItemData(i-1, cmb_box.tr(item[2]), Qt.ToolTipRole)
+
+    # icon = QIcon('logo.png')
+    ## adding icon to the given index
+    # self.combo_box.setItemIcon(i, icon)
+    # size = QSize(10, 10)
+    # self.combo_box.setIconSize(size)
+
+
+# ------------------------------------------------------------------------------
+def qget_cmb_box(cmb_box: QComboBox, data: bool = True) -> str:
+    """
+    Retrieve the current item data or text from a combo box.
+
+    Parameters:
+    -----------
+    cmb_box : QComboBox
+        The combo box to retrieve data from.
+    data : bool
+        If True, retrieves the item data; otherwise, retrieves the item text.
+
+    Returns:
+    --------
+    str
+        The current item data or text as a string.
+    """
+
+    if data:
+        idx = cmb_box.currentIndex()
+        cmb_data = cmb_box.itemData(idx)
+        cmb_str = str(cmb_data)  # convert QVariant, QString, string to plain string
+    else:
+        cmb_str = cmb_box.currentText()
+
+    return cmb_str
+
+
+# ------------------------------------------------------------------------------
+def qset_cmb_box(cmb_box: QComboBox, string: str, data: bool = False,
+                 fireSignals: bool = False, caseSensitive: bool = False) -> int:
+    """
+    Set combobox to the index corresponding to `string` in a text field (`data = False`)
+    or in a data field (`data=True`). When `string` is not found in the combobox entries,
+    select the first entry. Signals are blocked during the update of the combobox unless
+    `fireSignals` is set `True`. By default, the search is case insensitive, this
+    can be changed by passing `caseSensitive=False`.
+
+    Parameters:
+    -----------
+    cmb_box : QComboBox
+        The combo box to modify.
+    string : str
+        The string to match in the combo box. When the string is
+        not found, select the first entry of the combo box.
+    data : bool
+        If True, matches against item data; otherwise, matches against item text.
+    fireSignals : bool
+        If True, signals are fired during the update.
+    caseSensitive : bool
+        If True, performs a case-sensitive search.
+
+    Returns:
+    --------
+    int
+        The index of the matched string, or -1 if not found.
+    """
+    sig_blocked_old = cmb_box.signalsBlocked()
+
+    if caseSensitive:
+        flag = Qt.MatchFixedString | Qt.MatchCaseSensitive
+    else:
+        flag = Qt.MatchFixedString  # string based matching (case insensitive)
+
+    # Other more or less self explanatory flags:
+    # MatchExactly (default), MatchContains, MatchStartsWith, MatchEndsWith,
+    # MatchRegExp, MatchWildcard, MatchRecursive
+    if data:
+        idx = cmb_box.findData(str(string), flags=flag)  # find index for data == string
+    else:
+        idx = cmb_box.findText(str(string), flags=flag)  # find index for text == string
+
+    ret = idx
+
+    # if idx == old_idx:
+    #     return -2
+
+    cmb_box.blockSignals(not fireSignals)
+    if idx == -1:  # string hasn't been found
+        cmb_box.setCurrentIndex(0)  # set index to first entry
+    else:
+        cmb_box.setCurrentIndex(idx)  # set index as found in combobox
+    cmb_box.blockSignals(sig_blocked_old)
+
+    return ret
+
+
+# -----------------------------------------------------------------------------
+def qcmb_box_del_item(cmb_box: QComboBox, string: str, data: bool = False,
+                      fireSignals: bool = False, caseSensitive: bool = False) -> int:
+    """
+    Try to find the entry in combobox corresponding to `string` in a text field
+    (`data = False`) or in a data field (`data=True`) and delete the item. When `string`
+    is not found,do nothing. Signals are blocked during the update of the combobox unless
+    `fireSignals` is set `True`. By default, the search is case insensitive, this
+    can be changed by passing `caseSensitive=False`.
+
+    Parameters
+    ----------
+    string: str
+        The label in the text or data field to be deleted.
+
+    data: bool (default: False)
+        Whether the string refers to the data or text fields of the combo box
+
+    fireSignals: bool (default: False)
+        When True, fire a signal if the index is changed (useful for GUI testing)
+
+    caseInsensitive: bool (default: False)
+        When true, perform case sensitive search.
+
+    Returns:
+    --------
+    int
+        The index of the deleted item, or -1 if not found.
+    """
+    sig_blocked_old = cmb_box.signalsBlocked()
+
+    if caseSensitive:
+        flag = Qt.MatchFixedString | Qt.MatchCaseSensitive
+    else:
+        flag = Qt.MatchFixedString  # string based matching (case insensitive)
+
+    # Other more or less self explanatory flags:
+    # MatchExactly (default), MatchContains, MatchStartsWith, MatchEndsWith,
+    # MatchRegExp, MatchWildcard, MatchRecursive
+
+    if data:
+        idx = cmb_box.findData(str(string), flags=flag)  # find index for data == string
+    else:
+        idx = cmb_box.findText(str(string), flags=flag)  # find index for text == string
+
+    if idx > -1:  # data  / text exists in combo box, delete it.
+        cmb_box.blockSignals(not fireSignals)
+        cmb_box.removeItem(idx)  # set index
+        cmb_box.blockSignals(sig_blocked_old)
+
+    return idx
+
+
+# ----------------------------------------------------------------------------
+def qcmb_box_add_item(cmb_box: QComboBox, item_list: list, data: bool = True,
+                      fireSignals: bool = False, caseSensitive: bool = False) -> int:
+    """
+    Add an entry in combobox with text / data / tooltipp from `item_list`.
+    When the item is already in combobox (searching for data or text item, depending
+    `data`), do nothing. Signals are blocked during the update of the combobox unless
+    `fireSignals` is set `True`. By default, the search is case insensitive, this
+    can be changed by passing `caseSensitive=False`.
+
+    Parameters
+    ----------
+    item_list: list
+        List with `["new_data", "new_text", "new_tooltip"]` to be added.
+
+    data: bool (default: False)
+        Whether the string refers to the data or text fields of the combo box
+
+    fireSignals: bool (default: False)
+        When True, fire a signal if the index is changed (useful for GUI testing)
+
+    caseInsensitive: bool (default: False)
+        When true, perform case sensitive search.
+
+    Returns
+    -------
+        The index of the found item with string / data. When not found in the
+        combo box, return index -1.
+    """
+    if caseSensitive:
+        flag = Qt.MatchFixedString | Qt.MatchCaseSensitive
+    else:
+        flag = Qt.MatchFixedString  # string based matching (case insensitive)
+
+    # Other more or less self explanatory flags:
+    # MatchExactly (default), MatchContains, MatchStartsWith, MatchEndsWith,
+    # MatchRegExp, MatchWildcard, MatchRecursive
+
+    if data:
+        idx = cmb_box.findData(item_list[0], flags=flag)  # find index for data
+    else:
+        idx = cmb_box.findText(item_list[1], flags=flag)  # find index for text
+
+    if idx == -1:  # data  / text doesn't exist in combo box, add it.
+        cmb_box.blockSignals(not fireSignals)
+        cmb_box.addItem(cmb_box.tr(item_list[1]), item_list[0])  # set index
+        idx = cmb_box.findData(item_list[0])
+        cmb_box.setItemData(idx, cmb_box.tr(item_list[2]), Qt.ToolTipRole)
+        cmb_box.blockSignals(False)
+
+    return idx
+
+
+# ------------------------------------------------------------------------------
+def qstyle_widget(widget: QtWidgets.QWidget, state: str) -> None:
+    """
+    Apply the "state" defined in pyfda_rc.py to the widget, e.g.:
+    Color the >> DESIGN FILTER << button according to the filter design state.
+
+    This requires setting the property, "unpolishing" and "polishing" the widget
+    and finally forcing an update.
+
+    - 'normal' : default, no color styling
+    - 'ok':  green, filter has been designed, everything ok
+    - 'changed': yellow, filter specs have been changed
+    - 'running': orange, simulation is running
+    - 'error'  : red, an error has occurred during filter design
+    - 'u_error' : pink, e.g. for unused frequency inputs with out-of-bounds values
+    - 'u' or 'unused'  : grey text color
+    - 'd' or 'disabled': background color darkgrey
+    - 'a' or 'active'  : no special style defined
+    """
+    state = str(state)
+    if state == 'u':
+        state = 'unused'
+    elif state == 'a':
+        state = 'active'
+    elif state == 'd':
+        state = 'disabled'
+
+    widget.setProperty("state", state)
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+    widget.update()
+
+
+# ----------------------------------------------------------------------------
+def qget_selected(
+        table: QtWidgets.QTableWidget, select_all: bool = False, reverse: bool = True) -> dict:
+    """
+    Get selected cells in ``table`` and return a dictionary with the following key / value pairs:
+
+    - 'idx': indices of selected cells as an unsorted list of tuples
+    - 'sel': list of lists of selected cells per column, by default sorted in reverse
+    - 'cur':  current cell selection as a tuple
+
+    Parameters
+    ----------
+    select_all : bool
+        select all table items and create a list when True
+
+    reverse : bool
+        return selected fields upside down when True
+
+    Returns
+    -------
+    dict
+        A dictionary containing the indices, selected cells, and current cell selection.
+        {'idx': idx, 'sel': sel, 'cur': cur}
+    """
+    if select_all:
+        table.selectAll()
+
+    idx = []
+    for _ in table.selectedItems():
+        idx.append([_.column(), _.row(), ])
+
+    sel = [[], []]
+    sel[0] = sorted([i[1] for i in idx if i[0] == 0], reverse=reverse)
+    sel[1] = sorted([i[1] for i in idx if i[0] == 1], reverse=reverse)
+
+    if select_all:
+        table.clearSelection()
+
+    # use set comprehension to eliminate multiple identical entries
+    # cols = sorted(list({i[0] for i in idx}))
+    # rows = sorted(list({i[1] for i in idx}))
+    cur = (table.currentColumn(), table.currentRow())
+    # cur_idx_row = table.currentIndex().row()
+    return {'idx': idx, 'sel': sel, 'cur': cur}  # 'rows':rows 'cols':cols, }
+
+
+# ----------------------------------------------------------------------------
+def popup_warning(self, N: int = 0, filter_name: str = "", message: str = "") -> bool:
+    """
+    Pop-up a warning box and require a user prompt. When `message == ""`, warn of
+    very large filter orders, otherwise display the passed message
+
+    Parameters
+    ----------
+    N: int
+        Filter order, used for default message when `message == ""`
+    filter_name: str
+        Filter type, used for default message when `message == ""`
+    message: str
+        Custom message to be displayed in the warning box. When `message == ""`,
+        a message is generated about a high filter order `N` filter `filter_name`.
+
+    Returns
+    -------
+    bool
+        True if the user clicks "Yes" to continue, False if the user clicks "No".
+    """
+    if message == "":
+        message = (
+            f"<span><b><i>N</i> = {N}</b> is a rather high order for a<br />"
+            f"{filter_name} filter and may cause large <br />"
+            "numerical errors and compute times.<br />Continue?</span>")
+
+    reply = QMessageBox.warning(
+        self, 'Warning', message, QMessageBox.Yes, QMessageBox.No)
+
+    if reply == QMessageBox.Yes:
+        return True
+    return False
+
+
+# ----------------------------------------------------------------------------
+def qtext_width(text: str = '', N_x: int = 17, bold: bool = True, font: QFont = None) -> int:
+    """
+    Calculate width of `text` in points`. When `text=``, calculate the width
+    of number `N_x` of characters 'x'.
+
+    The actual width of the string is calculated by creating a
+    QTextDocument with the passed text and retrieving its `idealWidth()`
+
+    Parameters
+    ----------
+    text: str
+        string to calculate the width for
+
+    N_x: int
+        When `text == ''`, calculate the width from `N_x * width('x')`
+
+    bold: bool (default: True)
+        When `True`, determine width based on bold font
+
+    Returns
+    -------
+    width: int
+        The width of the text in points
+
+    Notes
+    -----
+    This is based on
+    https://stackoverflow.com/questions/27433165/how-to-reimplement-sizehint-for-bold-text-in-a-delegate-qt
+
+    and
+
+    https://stackoverflow.com/questions/47285303/how-can-i-limit-text-box-width-of-
+    #    qlineedit-to-display-at-most-four-characters/47307180#47307180
+
+    """
+    if text == '':
+        text = "x" * N_x
+
+    if font is None:
+        font = QFont()
+    if bold:
+        font.setBold(True)
+
+    document = QtGui.QTextDocument(text)
+    document.setDefaultFont(font)
+    # width = int(document.idealWidth())
+    return int(document.size().width())
+
+
+# ----------------------------------------------------------------------------
+def qtext_height(font: QFont = None) -> int:
+    """
+    Calculate size of `text` in points`.
+
+    The actual size of the string is calculated using fontMetrics and the default
+    or the passed font
+
+    Parameters
+    ----------
+
+    font: QFont
+        When `None`, use default font, otherwise use the passed font to calculate
+        the height of the text.
+
+    Returns
+    -------
+    lineSpacing: int
+        The height of the text (line spacing) in points
+
+    Notes
+    -----
+    This is based on
+    https://stackoverflow.com/questions/27433165/how-to-reimplement-sizehint-for-bold-text-in-a-delegate-qt
+
+    and
+
+    https://stackoverflow.com/questions/47285303/how-can-i-limit-text-box-width-of-
+    #    qlineedit-to-display-at-most-four-characters/47307180#47307180
+
+    https://stackoverflow.com/questions/56282199/fit-qtextedit-size-to-text-size-pyqt5
+
+    """
+    if font is None:
+        font = QFont()
+
+    fm = QFontMetrics(font)
+
+    return fm.lineSpacing()
+
+
+# ==============================================================================
+
+
+if __name__ == '__main__':
+    pass

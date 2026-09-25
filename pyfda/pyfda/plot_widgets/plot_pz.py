@@ -1,0 +1,629 @@
+# -*- coding: utf-8 -*-
+#
+# This file is part of the pyfda project hosted at https://github.com/chipmuenk/pyfda
+#
+# Copyright © pyfda Project Contributors
+# Licensed under the terms of the MIT License
+# (see file LICENSE in root directory for details)
+
+# TODO: Make P/Z draggable -> Bercher, Journey in Signal Processing with Jupyter, 2018.
+# TODO: Highlight P/Z selected in P/Z editor
+
+"""
+Widget for plotting poles and zeros
+"""
+import logging
+
+from matplotlib import patches, cm
+from matplotlib.ticker import AutoMinorLocator
+import numpy as np
+import scipy.signal as sig
+
+from pyfda.config_file_parser import ConfigFileParser as CFP
+from pyfda.filterbroker import fb_get
+from pyfda.libs.compat import (
+    QWidget, QLabel, QFrame, QDial, QHBoxLayout, pyqtSignal, QComboBox, QLineEdit)
+from pyfda.libs.pyfda_num_lib import safe_eval
+from pyfda.libs.pyfda_text_lib import to_html
+from pyfda.libs.special_functions import h_mag, unique_roots
+from pyfda.libs.pyfda_qt_lib import qcmb_box_populate, qget_cmb_box, qtext_width
+from pyfda.libs.pyfda_qt_classes import PushButton
+from pyfda.pyfda_rc import params
+
+from pyfda.plot_widgets.mpl_widget import MplWidget
+
+logger = logging.getLogger(__name__)
+
+classes = {'PlotPZ': 'P/Z'}  #: Dict containing class name : display name
+
+
+class PlotPZ(QWidget):
+    """ Widget for plotting poles and zeros """
+    # incoming, connected in sender widget (locally connected to self.process_sig_rx() )
+    sig_rx = pyqtSignal(object)
+
+    def __init__(self):
+        super().__init__()
+        self.needs_calc = True   # flag whether filter data has been changed
+        self.needs_draw = False  # flag whether whether figure needs to be drawn
+                                 # with new limits etc. (not implemented yet)
+        self.tool_tip = "Pole / zero plan"
+        self.tab_label = "P/Z"
+
+        self.cmb_overlay_items = [
+            "<span>Add various overlays to P/Z diagram.</span>",
+            ("none", "None", ""),
+            ("h(f)", "|H(f)|",
+             "<span>Show |H(f)| wrapped around the unit circle between 0 resp. -120 dB "
+             "and max(H(f)).</span>"),
+            ("contour", "Contour", "<span>Show contour lines for |H(z)|</span>"),
+            ("contourf", "Contourf", "<span>Show filled contours for |H(z)|</span>"),
+            ]
+        self.cmb_overlay_default = "none"  # default setting
+        self.cmap = "viridis"  # colormap
+
+        self.zmin = 0
+        self.zmax = 2
+        self.zmin_db = -80
+        self.zmax_db = np.round(20 * np.log10(self.zmax), 2)
+        self._construct_ui()
+
+# ------------------------------------------------------------------------------
+    def process_sig_rx(self, dict_sig: dict = None) -> None:
+        """
+        Process signals coming from the navigation toolbar and from sig_rx
+        """
+        # logger.info("Processing {0} | needs_draw = {1}, visible = {2}"\
+        #              .format(dict_sig, self.needs_calc, self.isVisible()))
+        if self.isVisible():
+            if 'data_changed' in dict_sig or self.needs_calc\
+                    or ('mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'home'):
+                self.draw()
+                self.needs_calc = False
+                self.needs_draw = False
+            elif 'view_changed' in dict_sig or self.needs_draw:
+                self.update_view()
+                self.needs_draw = False
+            elif 'ui_global_changed' in dict_sig\
+                    and dict_sig['ui_global_changed'] == 'resized':
+                self.draw()
+            elif 'mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'ui_level':
+                self.frm_controls.setVisible(self.mplwidget.mpl_toolbar.a_ui_level == 0)
+
+        else:
+            if 'data_changed' in dict_sig:
+                self.needs_calc = True
+            elif 'view_changed' in dict_sig:
+                self.needs_draw = True
+            elif 'ui_global_changed' in dict_sig\
+                    and dict_sig['ui_global_changed'] == 'resized':
+                self.needs_draw = True
+
+# ------------------------------------------------------------------------------
+    def _construct_ui(self):
+        """
+        Intitialize the widget, consisting of:
+        - Matplotlib widget with NavigationToolbar
+        - Frame with control elements
+        """
+        self.lbl_overlay = QLabel(to_html("Overlay:", frmt='bi'), self)
+        self.cmb_overlay = QComboBox(self)
+        qcmb_box_populate(
+            self.cmb_overlay, self.cmb_overlay_items, self.cmb_overlay_default)
+
+        self.but_log = PushButton(self, "Log.", objectName="but_log")
+        self.but_log.setChecked(True)
+        self.but_log.setToolTip("<span>Log. scale for overlays.</span>")
+
+        self.dia_rad_hf = QDial(self)
+        self.dia_rad_hf.setRange(2, 10)
+        self.dia_rad_hf.setValue(2)
+        self.dia_rad_hf.setTracking(False)  # produce less events when turning
+        self.dia_rad_hf.setFixedHeight(30)
+        self.dia_rad_hf.setFixedWidth(30)
+        self.dia_rad_hf.setWrapping(False)
+        self.dia_rad_hf.setToolTip("<span>Set max. radius for |H(f)| plot.</span>")
+
+        self.lbl_rad_hf = QLabel("Radius", self)
+
+        self.lbl_bottom = QLabel(to_html("Bottom =", frmt='bi'), self)
+        self.led_bottom = QLineEdit(self, objectName="led_bottom")
+        self.led_bottom.setText(str(self.zmin))
+        self.led_bottom.setMaximumWidth(qtext_width(N_x=8))
+        self.led_bottom.setToolTip("Minimum display value.")
+        self.lbl_bottom_db = QLabel("dB", self)
+        self.lbl_bottom_db.setVisible(self.but_log.isChecked())
+
+        self.lbl_top = QLabel(to_html("Top =", frmt='bi'), self)
+        self.led_top = QLineEdit(self, objectName="led_top")
+        self.led_top.setText(str(self.zmax))
+        self.led_top.setToolTip("Maximum display value.")
+        self.led_top.setMaximumWidth(qtext_width(N_x=8))
+        self.lbl_top_db = QLabel("dB", self)
+        self.lbl_top_db.setVisible(self.but_log.isChecked())
+
+        self.but_fir_poles = PushButton(self, "FIR Poles")
+        self.but_fir_poles.setChecked(True)
+        self.but_fir_poles.setToolTip("<span>Show FIR poles at the origin.</span>")
+
+        lay_h_controls = QHBoxLayout()
+        lay_h_controls.addWidget(self.lbl_overlay)
+        lay_h_controls.addWidget(self.cmb_overlay)
+        lay_h_controls.addWidget(self.but_log)
+        lay_h_controls.addWidget(self.dia_rad_hf)
+        lay_h_controls.addWidget(self.lbl_rad_hf)
+        lay_h_controls.addWidget(self.lbl_top)
+        lay_h_controls.addWidget(self.led_top)
+        lay_h_controls.addWidget(self.lbl_top_db)
+        lay_h_controls.addWidget(self.lbl_bottom)
+        lay_h_controls.addWidget(self.led_bottom)
+        lay_h_controls.addWidget(self.lbl_bottom_db)
+        lay_h_controls.addStretch(10)
+        lay_h_controls.addWidget(self.but_fir_poles)
+
+        # ----------------------------------------------------------------------
+        #               ### frm_controls ###
+        #
+        # This widget encompasses all control subwidgets
+        # ----------------------------------------------------------------------
+        self.frm_controls = QFrame(self, objectName="frm_controls")
+        self.frm_controls.setLayout(lay_h_controls)
+
+        # ----------------------------------------------------------------------
+        #               ### mplwidget ###
+        #
+        # main widget, encompassing the other widgets
+        # ----------------------------------------------------------------------
+        self.mplwidget = MplWidget(self)
+        self.mplwidget.lay_v_main_mpl.addWidget(self.frm_controls)
+        self.mplwidget.lay_v_main_mpl.setContentsMargins(*params['wdg_margins'])
+        self.mplwidget.mpl_toolbar.a_he.setEnabled(True)
+        self.mplwidget.mpl_toolbar.a_he.info = "manual/plot_pz.html"
+        self.mplwidget.mpl_toolbar.a_ui_num_levels = 2
+        self.setLayout(self.mplwidget.lay_v_main_mpl)
+
+        self.init_axes()
+
+        self._log_clicked()  # calculate and draw poles and zeros
+
+        # ----------------------------------------------------------------------
+        # GLOBAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        self.sig_rx.connect(self.process_sig_rx)
+        # ----------------------------------------------------------------------
+        # LOCAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        self.mplwidget.mpl_toolbar.sig_tx.connect(self.process_sig_rx)
+        self.cmb_overlay.currentIndexChanged.connect(self.draw)
+        self.but_log.clicked.connect(self._log_clicked)
+        self.led_bottom.editingFinished.connect(self._log_clicked)
+        self.led_top.editingFinished.connect(self._log_clicked)
+        self.dia_rad_hf.valueChanged.connect(self.draw)
+        self.but_fir_poles.clicked.connect(self.draw)
+
+    # --------------------------------------------------------------------------
+    def _log_clicked(self):
+        """
+        Change scale and settings to log / lin when log setting is changed
+        Update min / max settings when lineEdits have been edited
+        """
+        # clicking but_log triggered the slot or initialization
+        if self.sender() is None or self.sender().objectName() == 'but_log':
+            if self.but_log.isChecked():
+                self.led_bottom.setText(str(self.zmin_db))
+                self.zmax_db = np.round(20 * np.log10(self.zmax), 2)
+                self.led_top.setText(str(self.zmax_db))
+            else:
+                self.led_bottom.setText(str(self.zmin))
+                self.zmax = np.round(10**(self.zmax_db / 20), 2)
+                self.led_top.setText(str(self.zmax))
+
+        else:  # finishing a lineEdit field triggered the slot
+            if self.but_log.isChecked():
+                self.zmin_db = safe_eval(
+                    self.led_bottom.text(), self.zmin_db, return_type='float')
+                self.led_bottom.setText(str(self.zmin_db))
+                self.zmax_db = safe_eval(
+                    self.led_top.text(), self.zmax_db, return_type='float')
+                self.led_top.setText(str(self.zmax_db))
+            else:
+                self.zmin = safe_eval(
+                    self.led_bottom.text(), self.zmin, return_type='float')
+                self.led_bottom.setText(str(self.zmin))
+                self.zmax = safe_eval(self.led_top.text(), self.zmax, return_type='float')
+                self.led_top.setText(str(self.zmax))
+
+        self.draw()
+
+    # --------------------------------------------------------------------------
+    def init_axes(self):
+        """
+        Initialize and clear the axes (this is only run once)
+        """
+        self.mplwidget.fig.clf()  # needed to get rid of colorbar
+        if len(self.mplwidget.fig.get_axes()) == 0:  # empty figure, no axes
+            self.ax = self.mplwidget.fig.subplots()  # initialize axes
+        else:
+            self.ax = self.mplwidget.fig.get_axes()[0]
+        self.ax.xaxis.tick_bottom()  # remove axis ticks on top
+        self.ax.yaxis.tick_left()  # remove axis ticks right
+
+    # --------------------------------------------------------------------------
+    def update_view(self):
+        """
+        Draw the figure with new limits, scale etc without recalculating H(f)
+        -- not yet implemented, just use draw() for the moment
+        """
+        self.draw()
+
+    # --------------------------------------------------------------------------
+    def draw(self):
+        """
+        Refresh the pole-zero plot and update the visible overlay controls.
+
+        This method reinitializes the Matplotlib axes when necessary and
+        redraws the pole/zero diagram using the current filter data and
+        selected overlay mode.
+        """
+        self.but_fir_poles.setVisible(fb_get('ft') == 'FIR')
+        contour = qget_cmb_box(self.cmb_overlay) in {"contour", "contourf"}
+        self.led_bottom.setVisible(contour)
+        self.lbl_bottom.setVisible(contour)
+        self.lbl_bottom_db.setVisible(contour and self.but_log.isChecked())
+        self.led_top.setVisible(contour)
+        self.lbl_top.setVisible(contour)
+        self.lbl_top_db.setVisible(contour and self.but_log.isChecked())
+
+        self.init_axes()
+        self.draw_pz()
+
+    # --------------------------------------------------------------------------
+    def draw_pz(self):
+        """
+        (re)draw P/Z plot
+        """
+        p_marker = params['P_Marker']
+        z_marker = params['Z_Marker']
+
+        zpk = fb_get('zpk')
+
+        self.ax.clear()
+
+        _ = self.zplane(
+            z=zpk[0], p=zpk[1], k=zpk[2], plt_ax=self.ax,
+            plt_poles=self.but_fir_poles.isChecked() or fb_get('ft') == 'IIR',
+            mps=p_marker[0], mpc=p_marker[1], mzs=z_marker[0], mzc=z_marker[1])
+
+        self.ax.xaxis.set_minor_locator(AutoMinorLocator())  # enable minor ticks
+        self.ax.yaxis.set_minor_locator(AutoMinorLocator())  # enable minor ticks
+        self.ax.set_title(r'Pole / Zero Plot')
+        self.ax.set_xlabel('Real axis')
+        self.ax.set_ylabel('Imaginary axis')
+
+        overlay = qget_cmb_box(self.cmb_overlay)
+        self.but_log.setVisible(overlay != "none")
+
+        self.draw_hf(r=self.dia_rad_hf.value(), h_f_visible=overlay == "h(f)")
+
+        self.draw_contours(overlay)
+
+        self.redraw()
+
+    # --------------------------------------------------------------------------
+    def redraw(self):
+        """
+        Redraw the canvas when e.g. the canvas size has changed
+        """
+        self.mplwidget.redraw()
+
+    # --------------------------------------------------------------------------
+    def zplane(self, b=None, a=1, z=None, p=None, k=1,  pn_eps=1e-3, analog=False,
+               plt_ax=None, plt_poles=True, style='equal', ana_circle_rad=0, lw=2,
+               mps=10, mzs=10, mpc='r', mzc='b', plabel='Poles', zlabel='Zeros'):
+        """
+        Plot the poles and zeros in the complex z-plane either from the
+        coefficients (`b,`a) of a discrete transfer function `H`(`z`) (zpk = False)
+        or directly from the zeros and poles (z,p) (zpk = True).
+
+        When only b is given, an FIR filter with all poles at the origin is assumed.
+
+        Parameters
+        ----------
+        b :  array_like
+             Numerator coefficients (transversal part of filter)
+             When b is not None, poles and zeros are determined from the coefficients
+             b and a
+
+        a :  array_like (optional, default = 1 for FIR-filter)
+             Denominator coefficients (recursive part of filter)
+
+        z :  array_like, default = None
+             Zeros
+             When b is None, poles and zeros are taken directly from z and p
+
+        p :  array_like, default = None
+             Poles
+
+        analog : boolean (default: False)
+            When True, create a P/Z plot suitable for the s-plane, i.e. suppress
+            the unit circle (unless ana_circle_rad > 0) and scale the plot for
+            a good display of all poles and zeros.
+
+        pn_eps : float (default : 1e-2)
+             Tolerance for separating close poles or zeros
+
+        plt_ax : handle to axes for plotting (default: None)
+            When no axes is specified, the current axes is determined via plt.gca()
+
+        plt_poles : Boolean (default : True)
+            Plot poles. This can be used to suppress poles for FIR systems
+            where all poles are at the origin.
+
+        style : string (default: 'scaled')
+            Style of the plot, for `style == 'scaled'` make scale of x- and y-
+            axis equal, `style == 'equal'` forces x- and y-axes to be equal. This
+            is passed as an argument to the matplotlib `ax.axis(style)`
+
+        mps : integer  (default: 10)
+            Size for pole marker
+
+        mzs : integer (default: 10)
+            Size for zero marker
+
+        mpc : char (default: 'r')
+            Pole marker colour
+
+        mzc : char (default: 'b')
+            Zero marker colour
+
+        lw : integer (default:  2)
+            Linewidth for unit circle
+
+        plabel, zlabel : string (default: '')
+            This string is passed to the plot command for poles and zeros and
+            can be displayed by legend()
+
+
+        Returns
+        -------
+        z, p, k : ndarray
+
+
+        Notes
+        -----
+        """
+        # TODO:
+        # - polar option
+        # - add keywords for color of circle -> **kwargs
+        # - add option for multi-dimensional arrays and zpk data
+
+        # make sure that all inputs are (at least 1D) arrays
+        b = np.atleast_1d(b)
+        a = np.atleast_1d(a)
+        z = np.atleast_1d(z)
+        p = np.atleast_1d(p)
+
+        if b.any():  # coefficients were specified
+            if len(b) < 2 and len(a) < 2:
+                logger.error('No proper filter coefficients: both b and a are scalars!')
+                return z, p, k
+
+            # The coefficients are less than 1, normalize the coefficients
+            if np.max(b) > 1:
+                kn = np.max(b)
+                b = b / float(kn)
+            else:
+                kn = 1.
+
+            if np.max(a) > 1:
+                kd = np.max(a)
+                a = a / abs(kd)
+            else:
+                kd = 1.
+
+            # Calculate the poles, zeros and scaling factor
+            p = np.roots(a)
+            z = np.roots(b)
+            k = kn/kd
+        elif not (len(p) or len(z)):  # P/Z were specified
+            logger.error('Either b,a or z,p must be specified!')
+            return z, p, k
+
+        # find multiple poles and zeros and their multiplicities
+        if len(p) < 2:  # single pole, [None] or [0]
+            if not p or p == 0:  # only zeros, create equal number of poles at origin
+                p = np.array(0, ndmin=1)
+                num_p = np.atleast_1d(len(z))
+            else:
+                num_p = [1.]  # single pole != 0
+        else:
+            # p, num_p = sig.signaltools.unique_roots(p, tol = pn_eps, rtype='avg')
+            p, num_p = unique_roots(p, tol=pn_eps, rtype='avg')
+    #        p = np.array(p); num_p = np.ones(len(p))
+        if len(z) > 0:
+            z, num_z = unique_roots(z, tol=pn_eps, rtype='avg')
+    #        z = np.array(z); num_z = np.ones(len(z))
+            # z, num_z = sig.signaltools.unique_roots(z, tol = pn_eps, rtype='avg')
+        else:
+            num_z = []
+
+        if analog is False:
+            # create the unit circle for the z-plane
+            uc = patches.Circle((0, 0), radius=1, fill=False,
+                                color='grey', ls='solid', zorder=1)
+            plt_ax.add_patch(uc)
+            plt_ax.axis(style)
+        #    ax.spines['left'].set_position('center')
+        #    ax.spines['bottom'].set_position('center')
+        #    ax.spines['right'].set_visible(True)
+        #    ax.spines['top'].set_visible(True)
+
+        else:  # s-plane
+            if ana_circle_rad > 0:
+                # plot a circle with radius = ana_circle_rad
+                uc = patches.Circle((0, 0), radius=ana_circle_rad, fill=False,
+                                    color='grey', ls='solid', zorder=1)
+                plt_ax.add_patch(uc)
+            # plot real and imaginary axis
+            plt_ax.axhline(lw=2, color='k', zorder=1)
+            plt_ax.axvline(lw=2, color='k', zorder=1)
+
+        # Plot the zeros
+        plt_ax.scatter(z.real, z.imag, s=mzs*mzs, zorder=2, marker='o',
+                       facecolor='none', edgecolor=mzc, lw=lw, label=zlabel)
+        # and print their multiplicity
+        for i, z_i in enumerate(z):
+            logger.debug("z: %d | %s | %d", i, z_i, num_z[i])
+            if num_z[i] > 1:
+                plt_ax.text(np.real(z_i), np.imag(z_i), '  (' + str(num_z[i]) + ')',
+                            va='top', color=mzc)
+        if plt_poles:
+            # Plot the poles
+            plt_ax.scatter(p.real, p.imag, s=mps*mps, zorder=2, marker='x',
+                           color=mpc, lw=lw, label=plabel)
+            # and print their multiplicity
+            for i, p_i in enumerate(p):
+                logger.debug("p: %d | %s | %d", i, p_i, num_p[i])
+                if num_p[i] > 1:
+                    plt_ax.text(np.real(p_i), np.imag(p_i), '  (' + str(num_p[i]) + ')',
+                                va='bottom', color=mpc)
+
+# =============================================================================
+#            # increase distance between ticks and labels
+#            # to give some room for poles and zeros
+#         for tick in ax.get_xaxis().get_major_ticks():
+#             tick.set_pad(12.)
+#             tick.label1 = tick._get_text1()
+#         for tick in ax.get_yaxis().get_major_ticks():
+#             tick.set_pad(12.)
+#             tick.label1 = tick._get_text1()
+#
+# =============================================================================
+        xl = plt_ax.get_xlim()
+        dx = max(abs(xl[1]-xl[0]), 0.05)
+        yl = plt_ax.get_ylim()
+        dy = max(abs(yl[1]-yl[0]), 0.05)
+
+        plt_ax.set_xlim((xl[0]-dx*0.02, max(xl[1]+dx*0.02, 0)))
+        plt_ax.set_ylim((yl[0]-dy*0.02, yl[1] + dy*0.02))
+
+        return z, p, k
+
+    # --------------------------------------------------------------------------
+    def draw_contours(self, overlay: str) -> None:
+        """
+        Draw contour or filled contour plots for the magnitude response |H(z)|
+        in the complex z-plane.
+
+        Parameters:
+        -----------
+        overlay : str
+            Specifies the type of overlay to draw. Valid options are:
+            - "contour": Draw contour lines for |H(z)|.
+            - "contourf": Draw filled contours for |H(z)|.
+            - Any other value will skip drawing contours.
+
+        Notes:
+        ------
+        - The method uses the current axis limits to create a grid in the z-plane.
+        - The magnitude response is computed using the filter coefficients from
+          `fil[0]['ba']`.
+        - A colorbar is added to the plot to represent the magnitude values.
+        """
+        if overlay not in {"contour", "contourf"}:
+            return
+        self.ax.apply_aspect()  # normally, the correct aspect is only set when plotting
+        xl = self.ax.get_xlim()
+        yl = self.ax.get_ylim()
+        # logger.warning("limits: {0}, {1}".format(xl, yl))
+
+        [x, y] = np.meshgrid(
+            np.arange(xl[0], xl[1], (xl[1] - xl[0]) / 500),
+            np.arange(yl[0], yl[1], (yl[1] - yl[0]) / 500))
+        z = x + 1j*y  # create coordinate grid for complex plane
+
+        if self.but_log.isChecked():
+            h_max = self.zmax_db
+            h_min = self.zmin_db
+        else:
+            h_max = self.zmax
+            h_min = self.zmin
+        h_mag_values = h_mag(fb_get('ba')[0], fb_get('ba')[1], z, h_max, h_min=h_min,
+                     log=self.but_log.isChecked())
+
+        if overlay == "contour":
+            self.ax.contour(x, y, h_mag_values, 20, alpha=0.5, cmap=self.cmap)
+        else:
+            self.ax.contourf(x, y, h_mag_values, 20, alpha=0.5, cmap=self.cmap)
+
+        m_cb = cm.ScalarMappable(cmap=self.cmap)    # normalized proxy object that is
+        m_cb.set_array(h_mag_values)                        # mappable for colorbar (?)
+        self.col_bar = self.mplwidget.fig.colorbar(
+            m_cb, ax=self.ax, shrink=1.0, aspect=40, pad=0.01, fraction=0.08)
+
+        # Contour plots and color bar somehow mess up the coordinates:
+        # restore to previous settings
+        self.ax.set_xlim(xl)
+        self.ax.set_ylim(yl)  # Fixed: Correctly restore the y-axis limits
+
+    # --------------------------------------------------------------------------
+    def draw_hf(self, r: float = 2, h_f_visible: bool = True) -> None:
+        """
+        Draw the magnitude frequency response around the unit circle.
+
+        Parameters:
+        -----------
+        r : float
+            Radius for scaling the frequency response.
+
+        h_f_visible : bool
+            Whether to display the frequency response.
+        """
+        self.dia_rad_hf.setVisible(h_f_visible)
+        self.lbl_rad_hf.setVisible(h_f_visible)
+        if not h_f_visible:
+            return
+
+        # suppress "divide by zero in log10" warnings
+        old_settings_seterr = np.seterr()
+        np.seterr(divide='ignore')
+        ba = fb_get('ba')
+        w, h = sig.freqz(ba[0], ba[1], worN=CFP.conf_settings['N_FFT'], whole=True)
+        h = np.abs(h)
+        if self.but_log.isChecked():
+            h = np.clip(np.log10(h), -6, None)  # clip to -120 dB
+            h = h - np.max(h)  # shift scale to h_min ... 0
+            h = 1 + (r-1) * (1 + h / abs(np.min(h)))  # scale to 1 ... r
+        else:
+            h = 1 + (r-1) * h / np.max(h)  # map |H(f)| to a range 1 ... r
+        y = h * np.sin(w)
+        x = h * np.cos(w)
+
+        self.ax.plot(x, y, label="|H(f)|")
+        uc = patches.Circle((0, 0), radius=r, fill=False,
+                            color='grey', ls='dashed', zorder=1)
+        self.ax.add_patch(uc)
+
+        xl = self.ax.get_xlim()
+        xmax = max(abs(xl[0]), abs(xl[1]), r*1.05)
+        yl = self.ax.get_ylim()
+        ymax = max(abs(yl[0]), abs(yl[1]), r*1.05)
+        self.ax.set_xlim((-xmax, xmax))
+        self.ax.set_ylim((-ymax, ymax))
+
+        np.seterr(**old_settings_seterr)
+
+
+# ------------------------------------------------------------------------------
+if __name__ == "__main__":
+    # Run widget standalone with `python -m pyfda.plot_widgets.plot_pz`
+    import sys
+    from pyfda.libs.compat import QApplication
+    from pyfda.pyfda_rc import QSS
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(QSS.QSS_RC)
+    mainw = PlotPZ()
+    app.setActiveWindow(mainw)
+    mainw.show()
+    sys.exit(app.exec_())

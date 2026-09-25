@@ -1,0 +1,263 @@
+# -*- coding: utf-8 -*-
+#
+# This file is part of the pyfda project hosted at https://github.com/chipmuenk/pyfda
+#
+# Copyright © pyfda Project Contributors
+# Licensed under the terms of the MIT License
+# (see file LICENSE in root directory for details)
+
+""" Common settings and some helper functions for filter design """
+
+# pylint: disable=too-few-public-methods
+import numpy as np
+
+class Common():
+    """
+    Provide common settings for basic filter types
+    """
+    def __init__(self):
+        self.rt_base_iir = {
+            'com': {'man': {'fo': ('a', 'N')},
+                    'min': {'fo': ('d', 'N'),
+                            'msg': (
+                              'a',
+                    "Enter maximum pass band ripple <b><i>A<sub>PB</sub></i></b>, "
+                    "minimum stop band attenuation <b><i>A<sub>SB</sub> </i></b>"
+                    "&nbsp;and the corresponding corner frequencies of pass and "
+                    "stop band(s), <b><i>F<sub>PB</sub></i></b>&nbsp; and "
+                    "<b><i>F<sub>SB</sub></i></b> .")
+                        }
+                    },
+            'lp': {'man': {'fspecs': ('a', 'f_c'),
+                           'tspecs': ('u', {'frq': ('u', 'f_pb', 'f_sb'),
+                                            'amp': ('a', 'a_pb', 'a_sb')})
+                           },
+                   'min': {'fspecs': ('d', 'f_c'),
+                           'tspecs': ('a', {'frq': ('a', 'f_pb', 'f_sb'),
+                                            'amp': ('a', 'a_pb', 'a_sb')})
+                           }
+                   },
+            'hp': {'man': {'fspecs': ('a', 'f_c'),
+                           'tspecs': ('u', {'frq': ('u', 'f_sb', 'f_pb'),
+                                            'amp': ('a', 'a_sb', 'a_pb')})
+                           },
+                   'min':{'fspecs': ('d','f_c'),
+                          'tspecs': ('a', {'frq':('a','f_sb','f_pb'),
+                                           'amp':('a','a_sb','a_pb')})
+                         }
+                    },
+            'bp': {'man':{'fspecs': ('a','f_c', 'f_c2'),
+                          'tspecs': ('u', {'frq':('u','f_sb','f_pb','f_pb2','f_sb2'),
+                                           'amp':('a','a_sb','a_pb')})
+                         },
+                   'min':{'fspecs': ('d','f_c','f_c2'),
+                          'tspecs': ('a', {'frq':('a','f_sb','f_pb','f_pb2','f_sb2'),
+                                           'amp':('a','a_sb','a_pb')})
+                         },
+                    },
+            'bs': {'man':{'fspecs': ('a','f_c','f_c2'),
+                          'tspecs': ('u', {'frq':('u','f_pb','f_sb','f_sb2','f_pb2'),
+                                           'amp':('a','a_pb','a_sb')})
+                          },
+                   'min':{'fspecs': ('d','f_c','f_c2'),
+                          'tspecs': ('a', {'frq':('a','f_pb','f_sb','f_sb2','f_pb2'),
+                                           'amp':('a','a_pb','a_sb')})
+                        }
+                }
+            }
+
+# -------------------------------------------------------------------
+def remezord(freqs: list, amps: list, rips: list, fs: float = 1.,
+             alg: str = 'ichige') -> list:
+    """
+    Filter parameter selection for the Remez exchange algorithm.
+    Supplies remezord method according to Scipy Ticket #475
+        was: http://projects.scipy.org/scipy/ticket/475
+       now: https://github.com/scipy/scipy/issues/1002
+    https://github.com/thorstenkranz/eegpy/blob/master/eegpy/filter/remezord.py
+
+    Calculate the parameters required by the Remez exchange algorithm to
+    construct a finite impulse response (FIR) filter that approximately
+    meets the specified design.
+
+    Parameters
+    ----------
+
+    freqs : list
+        A monotonic sequence of band edges specified in Hertz. All elements
+        must be non-negative and less than 1/2 the sampling frequency as
+        given by the `fs` parameter. The band edges "0" and "f_S / 2" do not
+        have to be specified, hence  2 * number(amps) - 2 freqs are needed.
+
+    amps : list
+        A sequence containing the amplitudes of the signal to be
+        filtered over the various bands, e.g. 1 for the passband, 0 for the
+        stopband and 0.42 for some intermediate band.
+
+    rips : list
+        A list with the peak ripples (linear, not in dB!) for each band. For
+        the stop band this is equivalent to the minimum attenuation.
+
+    fs : float
+        Sampling frequency
+
+    alg : string
+        Filter length approximation algorithm. May be either 'herrmann',
+        'kaiser' or 'ichige'. Depending on the specifications, some of
+        the algorithms may give better results than the others.
+
+    Returns
+    -------
+
+    numtaps, bands, desired, weight -- See help for the remez function.
+
+    Examples
+    --------
+        We want to design a lowpass with the band edges of 40 resp. 50 Hz and a
+        sampling frequency of 200 Hz, a passband peak ripple of 10%
+        and a stop band ripple of 0.01 or 40 dB.
+
+        >>> (L, F, A, W) = remezord([40, 50], [1, 0], [0.1, 0.01], fs = 200)
+
+    """
+
+    # Make sure the parameters are floating point numpy arrays:
+    freqs = np.asarray(freqs, 'd')
+    amps = np.asarray(amps, 'd')
+    rips = np.asarray(rips, 'd')
+
+    # Scale ripples with respect to band amplitudes:
+    rips /= (amps + (amps == 0.0))
+
+    # Normalize input frequencies with respect to sampling frequency:
+    freqs /= fs
+
+    # Select filter length approximation algorithm:
+    if alg == 'herrmann':
+        remlplen = remlplen_herrmann
+    elif alg == 'kaiser':
+        remlplen = remlplen_kaiser
+    elif alg == 'ichige':
+        remlplen = remlplen_ichige
+    else:
+        raise ValueError('Unknown filter length approximation algorithm.')
+
+    # Validate inputs:
+    if any(freqs > 0.5):
+        raise ValueError('Frequency band edges must not exceed the Nyquist frequency.')
+    if any(freqs < 0.0):
+        raise ValueError('Frequency band edges must be nonnegative.')
+    if any(rips <= 0.0):
+        raise ValueError('Ripples must be nonnegative and non-zero.')
+    if len(amps) != len(rips):
+        raise ValueError('Number of amplitudes must equal number of ripples.')
+    if len(freqs) != 2*(len(amps)-1):
+        raise ValueError('Number of band edges must equal 2*(number of amplitudes-1)')
+
+    # Find the longest filter length needed to implement any of the
+    # low-pass or high-pass filters with the specified edges:
+    f1 = freqs[0:-1:2]
+    f2 = freqs[1::2]
+    fil_len = 0
+    for i in range(len(amps)-1):
+        fil_len = max(
+            (fil_len,
+                 remlplen(f1[i], f2[i], rips[i], rips[i+1]),
+                 remlplen(0.5-f2[i], 0.5-f1[i], rips[i+1], rips[i])))
+
+    # Cap the sequence of band edges with the limits of the digital frequency
+    # range:
+    bands = np.hstack((0.0, freqs, 0.5))
+
+    # The filter design weights correspond to the ratios between the maximum
+    # ripple and all of the other ripples:
+    weight = max(rips) / rips
+
+    return [fil_len, bands, amps, weight]
+
+# -------------------------------------------------------------------
+def remlplen_herrmann(fp: float, fs: float, dp: float, ds: float) -> int:
+    """
+    Determine the length of the low pass filter with passband frequency
+    fp, stopband frequency fs, passband ripple dp, and stopband ripple ds.
+    fp and fs must be normalized with respect to the sampling frequency.
+    Note that the filter order is one less than the filter length.
+
+    Uses approximation algorithm described by Herrmann et al.:
+
+    O. Herrmann, L.R. Raviner, and D.S.K. Chan, Practical Design Rules for
+    Optimum Finite Impulse Response Low-Pass Digital Filters, Bell Syst. Tech.
+    Jour., 52(6):769-799, Jul./Aug. 1973.
+    """
+
+    df = fs-fp
+    a = [5.309e-3, 7.114e-2, -4.761e-1, -2.66e-3, -5.941e-1, -4.278e-1]
+    b = [11.01217, 0.51244]
+    dinf = np.log10(ds) * (a[0] * np.log10(dp)**2 + a[1] * np.log10(dp) + a[2])\
+        + a[3] * np.log10(dp)**2 + a[4] * np.log10(dp) + a[5]
+    f = b[0] + b[1] * (np.log10(dp) - np.log10(ds))
+    n1 = dinf / df - f * df + 1
+
+    return int(n1)
+
+# -------------------------------------------------------------------
+def remlplen_kaiser(fp: float, fs: float, dp: float, ds: float) -> int:
+    """
+    Determine the length of the low pass filter with passband frequency
+    fp, stopband frequency fs, passband ripple dp, and stopband ripple ds.
+    fp and fs must be normalized with respect to the sampling frequency.
+    Note that the filter order is one less than the filter length.
+
+    Uses approximation algorithm described by Kaiser:
+
+    J.F. Kaiser, Nonrecursive Digital Filter Design Using I_0-sinh Window
+    function, Proc. IEEE Int. Symp. Circuits and Systems, 20-23, April 1974.
+    """
+
+    df = fs-fp
+    n2 = (-20*np.log10(np.sqrt(dp*ds))-13.0)/(14.6*df)+1.0
+
+    return int(n2)
+
+# ------------------------------------------------------------------------------
+def remlplen_ichige(fp: float, fs: float, dp: float, ds: float) -> int:
+    """
+    Determine the length of the low pass filter with passband frequency
+    fp, stopband frequency fs, passband ripple dp, and stopband ripple ds.
+    fp and fs must be normalized with respect to the sampling frequency.
+    Note that the filter order is one less than the filter length.
+    Uses approximation algorithm described by Ichige et al.:
+    K. Ichige, M. Iwaki, and R. Ishii, Accurate Estimation of Minimum
+    Filter Length for Optimum FIR Digital Filters, IEEE Transactions on
+    Circuits and Systems, 47(10):1008-1017, October 2000.
+
+    This seems to give the most accurate results of the three approximations.
+    """
+    #   dp_lin = (10**(dp/20.0)-1) / (10**(dp/20.0)+1)*2
+    def func_v(df: float, dp: float) -> float:
+        """ Helper function """
+        return 2.325 * ((-np.log10(dp))**-0.445) * df ** (-1.39)
+
+    def func_g(df: float, fp: float) -> float:
+        """ Helper function """
+        return (2.0 / np.pi) * np.arctan(func_v(df, dp) * (1.0 / fp - 1.0 / (0.5 - df)))
+
+    def func_h(df: float, fp: float, c: float) -> float:
+        """ Helper function """
+        return (2.0/np.pi) * np.arctan((c/df)*(1.0/fp-1.0/(0.5-df)))
+
+    df = fs-fp
+    # v = lambda df, dp: 2.325*((-np.log10(dp))**-0.445)*df**(-1.39)
+    # g = lambda fp, df, d: (2.0/np.pi)*np.arctan(v(df, dp)*(1.0/fp-1.0/(0.5-df)))
+    # h = lambda fp, df, c: (2.0/np.pi)*np.arctan((c/df)*(1.0/fp-1.0/(0.5-df)))
+    nc = np.ceil(1.0+(1.101/df) * (-np.log10(2.0*dp)) ** 1.1)
+    nm = (0.52/df)*np.log10(dp/ds)*(-np.log10(dp))**0.17
+    n3 = np.ceil(nc*(func_g(df, fp) + func_g(df, 0.5-df-fp) + 1.0) / 3.0)
+    dn = np.ceil(nm*(func_h(df, fp, 1.1) - (func_h(df, 0.5-df-fp, 0.29) - 1.0) / 2.0))
+    n4 = n3 + dn
+
+    return int(n4)
+
+# ------------------------------------------------------------------------------
+if __name__ == '__main__':
+    pass

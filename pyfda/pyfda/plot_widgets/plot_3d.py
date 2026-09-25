@@ -1,0 +1,629 @@
+# -*- coding: utf-8 -*-
+#
+# This file is part of the pyfda project hosted at https://github.com/chipmuenk/pyfda
+#
+# Copyright © pyfda Project Contributors
+# Licensed under the terms of the MIT License
+# (see file LICENSE in root directory for details)
+
+r"""
+Widget for plotting \|H(z)\| in 3D
+"""
+import logging
+
+from matplotlib.cm  import ScalarMappable  # Colormap
+from matplotlib import colormaps
+from matplotlib.colors import LightSource
+# from mpl_toolkits.mplot3d import Axes3D  # needed for matplotlib < 3.2
+# Axes3D = Axes3D  # prevent auto-deletion by IDE (Axes3D is never referenced)
+import numpy as np
+from numpy import pi, ones, sin, cos, log10
+import scipy.signal as sig
+
+from pyfda.config_file_parser import ConfigFileParser as CFP
+from pyfda.filterbroker import fb_get
+from pyfda.libs.compat import (
+    QWidget, QComboBox, QLabel, QLineEdit, QDial, QGridLayout, QFrame, pyqtSignal)
+from pyfda.libs.pyfda_num_lib import safe_eval
+from pyfda.libs.pyfda_text_lib import to_html
+from pyfda.libs.special_functions import h_mag
+from pyfda.libs.pyfda_qt_lib import qget_cmb_box
+from pyfda.libs.pyfda_qt_classes import PushButton
+from pyfda.plot_widgets.mpl_widget import MplWidget
+from pyfda.pyfda_rc import params
+
+logger = logging.getLogger(__name__)
+
+classes = {'Plot3D': '3D'}  #: Dict containing class name : display name
+
+PN_SIZE = 8  # size of P/N symbols
+class Plot3D(QWidget):
+    """
+    Class for various 3D-plots:
+    - lin / log line plot of H(f)
+    - lin / log surf plot of H(z)
+    - optional display of poles / zeros
+    """
+
+    # incoming, connected in sender widget (locally connected to self.process_sig_rx() )
+    sig_rx = pyqtSignal(object)
+#    sig_tx = pyqtSignal(object) # outgoing from process_signals
+
+    def __init__(self):
+        super().__init__()
+        self.zmin = 0
+        self.zmax = 4
+        self.zmin_db = -80
+        self.cmap_default = 'RdYlBu'
+        self.data_changed = True  # flag whether data has changed
+        self.tool_tip = "3D magnitude response |H(z)|"
+        self.tab_label = "3D"
+
+        self._construct_ui()
+
+# ------------------------------------------------------------------------------
+    def process_sig_rx(self, dict_sig=None):
+        """
+        Process signals coming from the navigation toolbar and from ``sig_rx``
+        """
+        logger.debug("Processing %s | data_changed = %s, visible = %s",
+                     dict_sig, self.data_changed, self.isVisible())
+        if self.isVisible():
+            if 'data_changed' in dict_sig or self.data_changed\
+                    or ('mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'home'):
+                self.draw()
+                self.data_changed = False
+            elif 'mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'ui_level':
+                self.frm_controls.setVisible(self.mplwidget.mpl_toolbar.a_ui_level == 0)
+
+        else:
+            if 'data_changed' in dict_sig:
+                self.data_changed = True
+
+# ------------------------------------------------------------------------------
+    def _construct_ui(self):
+        self.but_log = PushButton(self, "dB", objectName="but_log")
+        self.but_log.setToolTip("Logarithmic scale")
+
+        self.but_plot_in_uc = PushButton(self, "|z| < 1 ", checked=True,
+                                         objectName="but_plot_in_uc")
+        self.but_plot_in_uc.setToolTip("Only plot H(z) within the unit circle")
+
+        self.lbl_bottom = QLabel(to_html("Bottom =", frmt='bi'), self)
+        self.led_bottom = QLineEdit(self, objectName="led_bottom")
+        self.led_bottom.setText(str(self.zmin))
+        self.led_bottom.setToolTip("Minimum display value.")
+        self.lbl_bottom_db = QLabel("dB", self)
+        self.lbl_bottom_db.setVisible(self.but_log.isChecked())
+
+        self.lbl_top = QLabel(to_html("Top =", frmt='bi'), self)
+        self.led_top = QLineEdit(self, objectName="led_top")
+        self.led_top.setText(str(self.zmax))
+        self.led_top.setToolTip("Maximum display value.")
+        self.lbl_top_db = QLabel("dB", self)
+        self.lbl_top_db.setVisible(self.but_log.isChecked())
+
+        self.plt_uc = PushButton(self, "UC", objectName="plt_uc")
+        self.plt_uc.setChecked(True)
+        self.plt_uc.setToolTip("Plot unit circle")
+
+        self.but_pz = PushButton(self, "P/Z ", objectName="but_pz")
+        self.but_pz.setChecked(True)
+        self.but_pz.setToolTip("Plot poles and zeros")
+
+        self.but_hf = PushButton(self, "H(f) ", objectName="but_hf")
+        self.but_hf.setChecked(True)
+        self.but_hf.setToolTip("Plot H(f) along the unit circle")
+
+        modes = ['None', 'Mesh', 'Surf', 'Contour']
+        self.cmb_mode_3d = QComboBox(self, objectName="cmbShow3D")
+        self.cmb_mode_3d.addItems(modes)
+        self.cmb_mode_3d.setToolTip("Select 3D-plot mode.")
+        self.cmb_mode_3d.setCurrentIndex(0)
+        self.cmb_mode_3d.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+
+        self.but_colormap_r = PushButton(self, "reverse", objectName="but_colormap_r")
+        self.but_colormap_r.setChecked(True)
+        self.but_colormap_r.setToolTip("reverse colormap")
+
+        self.cmb_colormap = QComboBox(self)
+        self._init_cmb_colormap(cmap_init=self.cmap_default)
+        self.cmb_colormap.setToolTip("Select colormap")
+
+        self.but_colbar = PushButton(self, "Colorbar ", objectName="chkColBar")
+        self.but_colbar.setToolTip("Show colorbar")
+
+        self.but_lighting = PushButton(self, "Lighting", objectName="but_lighting")
+        self.but_lighting.setToolTip("Enable light source")
+
+        self.lbl_alpha = QLabel(to_html("Alpha", frmt='bi'), self)
+        self.dia_alpha = QDial(self)
+        self.dia_alpha.setRange(0, 10)
+        self.dia_alpha.setValue(5)
+        self.dia_alpha.setTracking(False)  # produce less events when turning
+        self.dia_alpha.setFixedHeight(30)
+        self.dia_alpha.setFixedWidth(30)
+        self.dia_alpha.setWrapping(False)
+        self.dia_alpha.setToolTip("<span>Set transparency for surf and contour plots.</span>")
+
+        self.lbl_hatch = QLabel(to_html("Stride", frmt='bi'), self)
+        self.dia_hatch = QDial(self)
+        self.dia_hatch.setRange(0, 9)
+        self.dia_hatch.setValue(5)
+        self.dia_hatch.setTracking(False)  # produce less events when turning
+        self.dia_hatch.setFixedHeight(30)
+        self.dia_hatch.setFixedWidth(30)
+        self.dia_hatch.setWrapping(False)
+        self.dia_hatch.setToolTip("Set line density for various plots.")
+
+        self.but_contour_2d = PushButton(self, "Contour2D ", objectName="chkContour2D")
+        self.but_contour_2d.setToolTip("Plot 2D-contours at z =0")
+
+        # ----------------------------------------------------------------------
+        # LAYOUT for UI widgets
+        # ----------------------------------------------------------------------
+        lay_g_controls = QGridLayout()
+        lay_g_controls.addWidget(self.but_log, 0, 0)
+        lay_g_controls.addWidget(self.but_plot_in_uc, 1, 0)
+        lay_g_controls.addWidget(self.lbl_top, 0, 2)
+        lay_g_controls.addWidget(self.led_top, 0, 4)
+        lay_g_controls.addWidget(self.lbl_top_db, 0, 5)
+        lay_g_controls.addWidget(self.lbl_bottom, 1, 2)
+        lay_g_controls.addWidget(self.led_bottom, 1, 4)
+        lay_g_controls.addWidget(self.lbl_bottom_db, 1, 5)
+        lay_g_controls.setColumnStretch(5,1)
+
+        lay_g_controls.addWidget(self.plt_uc, 0, 6)
+        lay_g_controls.addWidget(self.but_hf, 1, 6)
+        lay_g_controls.addWidget(self.but_pz, 0, 8)
+
+        lay_g_controls.addWidget(self.cmb_mode_3d, 0, 10)
+        lay_g_controls.addWidget(self.but_contour_2d, 1, 10)
+        lay_g_controls.addWidget(self.cmb_colormap, 0, 12, 1, 1)
+        lay_g_controls.addWidget(self.but_colormap_r, 1, 12)
+
+        lay_g_controls.addWidget(self.but_lighting, 0, 14)
+        lay_g_controls.addWidget(self.but_colbar, 1, 14)
+
+        lay_g_controls.addWidget(self.lbl_alpha, 0, 15)
+        lay_g_controls.addWidget(self.dia_alpha, 0, 16)
+
+        lay_g_controls.addWidget(self.lbl_hatch, 1, 15)
+        lay_g_controls.addWidget(self.dia_hatch, 1, 16)
+
+        # This widget encompasses all control subwidgets
+        self.frm_controls = QFrame(self, objectName="frm_controls")
+        self.frm_controls.setLayout(lay_g_controls)
+
+        # ----------------------------------------------------------------------
+        # mplwidget
+        # ----------------------------------------------------------------------
+        # This is the plot pane widget, encompassing the other widgets
+        self.mplwidget = MplWidget(self)
+        self.mplwidget.lay_v_main_mpl.addWidget(self.frm_controls)
+        self.mplwidget.lay_v_main_mpl.setContentsMargins(*params['mpl_margins'])
+        self.mplwidget.mpl_toolbar.a_he.setEnabled(True)
+        self.mplwidget.mpl_toolbar.a_he.info = "manual/plot_3d.html"
+        self.mplwidget.mpl_toolbar.a_ui_num_levels = 2
+        self.setLayout(self.mplwidget.lay_v_main_mpl)
+
+        self._init_grid()  # initialize grid and do initial plot
+
+        # ----------------------------------------------------------------------
+        # GLOBAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        self.sig_rx.connect(self.process_sig_rx)
+        # ----------------------------------------------------------------------
+        # LOCAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        self.but_log.clicked.connect(self._log_clicked)
+        self.led_bottom.editingFinished.connect(self._log_clicked)
+        self.led_top.editingFinished.connect(self._log_clicked)
+
+        self.but_plot_in_uc.clicked.connect(self._init_grid)
+        self.plt_uc.clicked.connect(self.draw)
+        self.but_hf.clicked.connect(self.draw)
+        self.but_pz.clicked.connect(self.draw)
+        self.cmb_mode_3d.currentIndexChanged.connect(self.draw)
+        self.but_colbar.clicked.connect(self.draw)
+
+        self.cmb_colormap.currentIndexChanged.connect(self.draw)
+        self.but_colormap_r.clicked.connect(self.draw)
+
+        self.but_lighting.clicked.connect(self.draw)
+        self.dia_alpha.valueChanged.connect(self.draw)
+        self.dia_hatch.valueChanged.connect(self.draw)
+        self.but_contour_2d.clicked.connect(self.draw)
+
+        self.mplwidget.mpl_toolbar.sig_tx.connect(self.process_sig_rx)
+        # self.mplwidget.mpl_toolbar.enable_plot(state = False) # disable initially
+
+# ------------------------------------------------------------------------------
+    def _init_cmb_colormap(self, cmap_init):
+        """
+        Initialize combobox with available colormaps and try to set it to `cmap_init`
+        """
+        self.cmb_colormap.addItems([m for m in colormaps() if not m.endswith("_r")])
+
+        idx = self.cmb_colormap.findText(cmap_init)
+        if idx == -1:
+            idx = 0
+        self.cmb_colormap.setCurrentIndex(idx)
+
+# ------------------------------------------------------------------------------
+    def _init_grid(self):
+        """ Initialize (x,y,z) coordinate grid + (re)draw plot."""
+        phi_uc = np.linspace(0, 2*pi, 400, endpoint=True)  # angles for unit circle
+        self.xy_uc = np.exp(1j * phi_uc)  # x,y coordinates of unity circle
+
+        steps = 100              # number of steps for x, y, r, phi
+        # cartesian range limits
+        self.xmin = -1.5
+        self.xmax = 1.5
+        self.ymin = -1.5
+        self.ymax = 1.5
+
+        # Polar range limits
+        rmin = 0
+        rmax = 1
+
+        # Calculate grids for 3D-Plots
+        dr = rmax / steps * 2  # grid size for polar range
+        dx = (self.xmax - self.xmin) / steps
+        dy = (self.ymax - self.ymin) / steps  # grid size cartesian range
+
+        if self.but_plot_in_uc.isChecked():  # Plot circular range in 3D-Plot
+            [r, phi] = np.meshgrid(np.arange(rmin, rmax, dr),
+                                   np.linspace(0, 2 * pi, steps, endpoint=True))
+            self.x = r * cos(phi)
+            self.y = r * sin(phi)
+        else:  # cartesian grid
+            [self.x, self.y] = np.meshgrid(np.arange(self.xmin, self.xmax, dx),
+                                           np.arange(self.ymin, self.ymax, dy))
+
+        self.z = self.x + 1j*self.y  # create coordinate grid for complex plane
+
+        self.draw()  # initial plot
+
+# ------------------------------------------------------------------------------
+    def init_axes(self):
+        """
+        Initialize and clear the axes to get rid of colorbar
+        The azimuth / elevation / distance settings of the camera are restored
+        after clearing the axes. See
+        http://stackoverflow.com/questions/4575588/matplotlib-3d-plot-with-pyqt4-in-qtabwidget-mplwidget
+        """
+
+        self._save_axes()
+
+        self.mplwidget.fig.clf()  # needed to get rid of colorbar
+        self.ax3d = self.mplwidget.fig.add_subplot(111, projection='3d')
+        # self.ax3d.set_box_aspect(aspect=(4, 1, 0.5), zoom=1.3)
+        # self.ax3d.set_aspect('auto', adjustable='box')
+        # self.ax3d = self.mplwidget.fig.subplots(nrows=1, ncols=1, projection='3d')
+
+        self._restore_axes()
+
+# ------------------------------------------------------------------------------
+    def _save_axes(self):
+        """
+        Store x/y/z - limits and camera position
+        """
+
+        try:
+            self.azim = self.ax3d.azim
+            self.elev = self.ax3d.elev
+            self.dist = self.ax3d.dist
+            self.xlim = self.ax3d.get_xlim3d()
+            self.ylim = self.ax3d.get_ylim3d()
+            self.zlim = self.ax3d.get_zlim3d()
+
+        except AttributeError:  # not yet initialized, set standard values
+            self.azim = -65
+            self.elev = 30
+            self.dist = 10
+            self.xlim = (self.xmin, self.xmax)
+            self.ylim = (self.ymin, self.ymax)
+            self.zlim = (self.zmin, self.zmax)
+
+# ------------------------------------------------------------------------------
+    def _restore_axes(self):
+        """
+        Restore x/y/z - limits and camera position
+        """
+        if self.mplwidget.mpl_toolbar.a_lk.isChecked():
+            self.ax3d.set_xlim3d(self.xlim)
+            self.ax3d.set_ylim3d(self.ylim)
+            self.ax3d.set_zlim3d(self.zlim)
+        self.ax3d.azim = self.azim
+        self.ax3d.elev = self.elev
+        self.ax3d.dist = self.dist
+
+# ------------------------------------------------------------------------------
+    def _log_clicked(self):
+        """
+        Change scale and settings to log / lin when log setting is changed
+        Update min / max settings when lineEdits have been edited
+        """
+        if self.sender().objectName() == 'but_log':  # clicking but_log triggered the slot
+            if self.but_log.isChecked():
+                self.led_bottom.setText(str(self.zmin_db))
+                self.zmax_db = np.round(20 * log10(self.zmax), 2)
+                self.led_top.setText(str(self.zmax_db))
+                self.lbl_top_db.setVisible(True)
+                self.lbl_bottom_db.setVisible(True)
+            else:
+                self.led_bottom.setText(str(self.zmin))
+                self.zmax = np.round(10**(self.zmax_db / 20), 2)
+                self.led_top.setText(str(self.zmax))
+                self.lbl_top_db.setVisible(False)
+                self.lbl_bottom_db.setVisible(False)
+
+        else:  # finishing a lineEdit field triggered the slot
+            if self.but_log.isChecked():
+                self.zmin_db = safe_eval(
+                    self.led_bottom.text(), self.zmin_db, return_type='float')
+                self.led_bottom.setText(str(self.zmin_db))
+                self.zmax_db = safe_eval(
+                    self.led_top.text(), self.zmax_db, return_type='float')
+                self.led_top.setText(str(self.zmax_db))
+            else:
+                self.zmin = safe_eval(
+                    self.led_bottom.text(), self.zmin, return_type='float')
+                self.led_bottom.setText(str(self.zmin))
+                self.zmax = safe_eval(self.led_top.text(), self.zmax, return_type='float')
+                self.led_top.setText(str(self.zmax))
+
+        self.draw()
+
+# ------------------------------------------------------------------------------
+    def draw(self):
+        """
+        Main drawing entry point: perform the actual plot
+        """
+        self.draw_3d()
+
+# ------------------------------------------------------------------------------
+    def draw_3d(self):
+        """
+        Draw various 3D plots
+        """
+        self.init_axes()
+
+        bb = fb_get('ba', 0)
+        aa = fb_get('ba', 1)
+
+        zz = np.array(fb_get('zpk', 0))
+        pp = np.array(fb_get('zpk', 1))
+
+        n_fft = CFP.conf_settings['N_FFT']
+
+        alpha = self.dia_alpha.value()/10.
+
+        cmap = colormaps[str(self.cmb_colormap.currentText())]
+        if self.but_colormap_r.isChecked():
+            cmap = cmap.reversed()  # use reversed colormap
+
+        # Number of Lines /step size for H(f) stride, mesh, contour3d:
+        stride = 10 - self.dia_hatch.value()
+        nl = 3 * self.dia_hatch.value() + 5
+
+        surf_enabled = qget_cmb_box(self.cmb_mode_3d, data=False) in {'Surf', 'Contour'}\
+            or self.but_contour_2d.isChecked()
+        self.cmb_colormap.setEnabled(surf_enabled)
+        self.but_colormap_r.setEnabled(surf_enabled)
+        self.but_lighting.setEnabled(surf_enabled)
+        self.but_colbar.setEnabled(surf_enabled)
+        self.dia_alpha.setEnabled(surf_enabled or self.but_contour_2d.isChecked())
+
+        # cNorm  = colors.Normalize(vmin=0, vmax=values[-1])
+        # scalarMap = cmx.ScalarMappable(norm=cNorm, cmap=jet)
+
+        # -----------------------------------------------------------------------------
+        # Calculate H(w) along the upper half of unity circle
+        # -----------------------------------------------------------------------------
+
+
+        [_, H] = sig.freqz(bb, aa, worN=n_fft, whole=True)
+        H = np.nan_to_num(H)  # replace nans and inf by finite numbers
+
+        h_abs = abs(H)
+        # h_max = max(h_abs)
+        h_min = min(h_abs)
+        # f = w / (2 * pi) * f_s                  # translate w to absolute frequencies
+        # f_min = f[np.argmin(h_abs)]
+
+        plevel_rel = 1.05  # height of plotted pole position relative to zmax
+        zlevel_rel = 0.1  # height of plotted zero position relative to zmax
+
+        if self.but_log.isChecked():  # logarithmic scale
+            # suppress "divide by zero in log10" warnings
+            old_settings_seterr = np.seterr()
+            np.seterr(divide='ignore')
+
+            bottom = np.floor(max(self.zmin_db, 20*log10(h_min)) / 10) * 10
+            top = self.zmax_db
+            top_bottom = top - bottom
+
+            zlevel = bottom - top_bottom * zlevel_rel
+
+            if self.cmb_mode_3d.currentText() == 'None':  # "Poleposition": H(f) plot only
+                plevel_top = 2 * bottom - zlevel  # height of displayed pole position
+                plevel_btm = bottom
+            else:
+                plevel_top = top + top_bottom * (plevel_rel - 1)
+                plevel_btm = top
+
+            np.seterr(**old_settings_seterr)
+
+        else:  # linear scale
+            bottom = max(self.zmin, h_min)  # min. display value
+            top = self.zmax                 # max. display value
+            top_bottom = top - bottom
+        #   top = zmax_rel * h_max # calculate display top from max. of H(f)
+
+            zlevel = bottom + top_bottom * zlevel_rel  # height of displayed zero position
+
+            if self.cmb_mode_3d.currentText() == 'None':  # "Poleposition": H(f) plot only
+                # h_max = np.clip(max(h_abs), 0, self.zmax)
+                # make height of displayed poles same to zeros
+                plevel_top = bottom + top_bottom * zlevel_rel
+                plevel_btm = bottom
+            else:
+                plevel_top = plevel_rel * top
+                plevel_btm = top
+
+        # calculate H(jw)| along the unity circle and |H(z)|, each clipped
+        # between bottom and top
+        h_mag_uc = h_mag(bb, aa, self.xy_uc, top, h_min=bottom, log=self.but_log.isChecked())
+        h_mag_z = h_mag(bb, aa, self.z, top, h_min=bottom, log=self.but_log.isChecked())
+
+        # ===============================================================
+        # Plot Unit Circle (UC)
+        # ===============================================================
+        if self.plt_uc.isChecked():
+            #  Plot unit circle and marker at (1,0):
+            self.ax3d.plot(self.xy_uc.real, self.xy_uc.imag,
+                           ones(len(self.xy_uc)) * bottom, lw=2, color='k')
+            self.ax3d.plot([0.97, 1.03], [0, 0], [bottom, bottom], lw=2, color='k')
+
+        # ===============================================================
+        # Plot ||H(f)| along unit circle as 3D-lineplot
+        # ===============================================================
+        if self.but_hf.isChecked():
+            self.ax3d.plot(self.xy_uc.real, self.xy_uc.imag, h_mag_uc, alpha=0.8, lw=4)
+            # draw once more as dashed white line to improve visibility
+            self.ax3d.plot(self.xy_uc.real, self.xy_uc.imag, h_mag_uc, 'w--', lw=4)
+
+            if stride < 10:  # plot thin vertical line every stride points on the UC
+                for k in range(len(self.xy_uc[::stride])):
+                    self.ax3d.plot(
+                        [self.xy_uc.real[::stride][k], self.xy_uc.real[::stride][k]],
+                        [self.xy_uc.imag[::stride][k], self.xy_uc.imag[::stride][k]],
+                        [np.ones(len(self.xy_uc[::stride]))[k]*bottom, h_mag_uc[::stride][k]],
+                        linewidth=1, color=(0.5, 0.5, 0.5))
+
+        # ===============================================================
+        # Plot Poles and Zeros
+        # ===============================================================
+        if self.but_pz.isChecked():
+            # Plot zero markers at |H(z_i)| = zlevel with "stems":
+            self.ax3d.plot(zz.real, zz.imag, ones(len(zz)) * zlevel, 'o',
+               markersize=PN_SIZE, markeredgecolor='blue', markeredgewidth=2.0,
+                markerfacecolor='none')
+            for k in range(len(zz)):  # plot zero "stems"
+                self.ax3d.plot([zz[k].real, zz[k].real], [zz[k].imag, zz[k].imag],
+                            [bottom, zlevel], linewidth=1, color='b')
+
+            # Plot the poles at |H(z_p)| = plevel with "stems":
+            self.ax3d.plot(np.real(pp), np.imag(pp), plevel_top,
+              'x', markersize=PN_SIZE, markeredgewidth=2.0, markeredgecolor='red')
+            for k in range(len(pp)):  # plot pole "stems"
+                self.ax3d.plot([pp[k].real, pp[k].real], [pp[k].imag, pp[k].imag],
+                            [plevel_btm, plevel_top], linewidth=1, color='r')
+
+        # ===============================================================
+        # 3D-Plots of |H(z)| clipped between |H(z)| = top
+        # ===============================================================
+
+        m_cb = ScalarMappable(cmap=cmap)  # normalized proxy object that is mappable
+        m_cb.set_array(h_mag_z)              # for colorbar
+
+        # ---------------------------------------------------------------
+        # 3D-mesh plot
+        # ---------------------------------------------------------------
+        if self.cmb_mode_3d.currentText() == 'Mesh':
+            # fig_mlab = mlab.figure(fgcolor=(0., 0., 0.), bgcolor=(1, 1, 1))
+            # self.ax3d.set_zlim(0,2)
+            self.ax3d.plot_wireframe(
+                self.x, self.y, h_mag_z, rstride=5, cstride=stride,
+                linewidth=1, color='gray')
+
+        # ---------------------------------------------------------------
+        # 3D-surface plot
+        # ---------------------------------------------------------------
+        # http://stackoverflow.com/questions/28232879/phong-shading-for-shiny-python-3d-surface-plots
+        elif self.cmb_mode_3d.currentText() == 'Surf':
+
+            if self.but_lighting.isChecked():
+                ls = LightSource(azdeg=0, altdeg=65)  # Create light source object
+                rgb = ls.shade(h_mag_z, cmap=cmap)  # Shade data, creating an rgb array
+                cmap_surf = None
+            else:
+                rgb = None
+                cmap_surf = cmap
+
+#            s = self.ax3d.plot_surface(self.x, self.y, h_mag_z,
+#                    alpha=OPT_3D_ALPHA, rstride=1, cstride=1, cmap=cmap,
+#                    linewidth=0, antialiased=False, shade=True, facecolors = rgb)
+#            s.set_edgecolor('gray')
+            s = self.ax3d.plot_surface(
+                self.x, self.y, h_mag_z, alpha=alpha, rstride=1, cstride=1, linewidth=0,
+                antialiased=False, facecolors=rgb, cmap=cmap_surf, shade=True)
+            s.set_edgecolor(None)
+        # ---------------------------------------------------------------
+        # 3D-Contour plot
+        # ---------------------------------------------------------------
+        elif self.cmb_mode_3d.currentText() == 'Contour':
+            s = self.ax3d.contourf3D(self.x, self.y, h_mag_z, nl, alpha=alpha, cmap=cmap)
+
+        # ---------------------------------------------------------------
+        # 2D-Contour plot
+        # TODO: zdir = x / y delivers unexpected results -> rather plot max(H)
+        #       along the other axis?
+        # TODO: colormap is created depending on the zdir = 'z' contour plot
+        #       -> set limits of (all) other plots manually?
+        if self.but_contour_2d.isChecked():
+            self.ax3d.contourf(self.x, self.y, h_mag_z, nl, zdir='x', offset=self.xmin,
+                cmap=cmap, alpha = alpha)#, vmin = bottom)#, vmax = top, vmin = bottom)
+            self.ax3d.contourf(self.x, self.y, h_mag_z, nl, zdir='y', offset=self.ymin,
+                cmap=cmap, alpha = alpha)#, vmin = bottom)#, vmax = top, vmin = bottom)
+            s = self.ax3d.contourf(
+                self.x, self.y, h_mag_z, nl, zdir='z', offset=bottom - (top - bottom) * 0.05,
+                cmap=cmap, alpha=alpha)
+
+        # plot colorbar for suitable plot modes
+        if self.but_colbar.isChecked() and (self.but_contour_2d.isChecked() or
+                                            str(self.cmb_mode_3d.currentText())
+                                            in {'Contour', 'Surf'}):
+            self.colb = self.mplwidget.fig.colorbar(m_cb, ax=self.ax3d, shrink=0.8,
+                                                    aspect=20, pad=0.02, fraction=0.08)
+
+        # ----------------------------------------------------------------------
+        # Set view limits and labels
+        # ----------------------------------------------------------------------
+        if not self.mplwidget.mpl_toolbar.a_lk.isChecked():
+            self.ax3d.set_xlim3d(self.xmin, self.xmax)
+            self.ax3d.set_ylim3d(self.ymin, self.ymax)
+            self.ax3d.set_zlim3d(bottom, top)
+        else:
+            self._restore_axes()
+
+        self.ax3d.set_xlabel('Re')
+        self.ax3d.set_ylabel('Im')
+#        self.ax3d.set_zlabel(r'$|H(z)|\; \rightarrow $')
+        self.ax3d.set_title(r'3D-Plot of $|H(\mathrm{e}^{\mathrm{j} \Omega})|$ and $|H(z)|$')
+
+        self.redraw()
+
+# ------------------------------------------------------------------------------
+    def redraw(self):
+        """
+        Redraw the canvas when e.g. the canvas size has changed
+        """
+        self.mplwidget.redraw()
+
+
+# ------------------------------------------------------------------------------
+if __name__ == "__main__":
+    # Run widget standalone with `python -m pyfda.plot_widgets.plot_3d`
+    import sys
+    from pyfda.libs.compat import QApplication
+    from pyfda.pyfda_rc import QSS
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(QSS.QSS_RC)
+    mainw = Plot3D()
+    app.setActiveWindow(mainw)
+    mainw.show()
+    sys.exit(app.exec_())
