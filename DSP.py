@@ -5,9 +5,10 @@ from scipy import signal
 #the result of a digital filtering and compare it with the original one.
 
 class DSP:
-    def __init__(self, data, fs, filt = 'No', num = np.array([1]), den = np.array([1, 0])):
+    def __init__(self, data, fs, filt = False, num = np.array([1]), den = np.array([1, 0])):
         self.data = np.array(data)
-        self.filt = filt
+        #filt enables the filter; the legacy 'Yes'/'No' strings are still accepted
+        self.filt = (filt == 'Yes') if isinstance(filt, str) else bool(filt)
         self.num = num
         self.den = den
         self.data_l = list(data)
@@ -36,7 +37,7 @@ class DSP:
                 break
             n = n + 1
         #If a filter has been defined, it calculates how the data array would have been using this filter
-        if (self.filt == 'Yes'):
+        if self.filt:
             y = signal.filtfilt(self.num, self.den, self.data_l)
             self.data_f = y
             YFFT3 = abs(np.fft.fft(y))/len(y)
@@ -49,6 +50,8 @@ class DSP:
                 else:
                     break
                 n = n + 1
+        #Returns the frequency axis, the original spectrum and the filtered spectrum (None when no filter is used)
+        return self.x, self.YFFT, (self.YF_FFT if self.filt else None)
     
     #Once the numerical calculations have been done, they can be plotted to see the results
     def plot(self,):
@@ -56,13 +59,13 @@ class DSP:
         fig, ax = plt.subplots(2)
         fig.suptitle('Frequencial Analysis of the Signal')
         ax[0].plot(t, self.data_l,'b', label = 'Original')
-        if (self.filt == 'Yes'):
+        if self.filt:
             ax[0].plot(t, self.data_f,'r', label = 'Filtered')
         ax[0].set(xlabel='Seconds', ylabel='Value')
         ax[0].grid()
         ax[0].legend(loc='best')
         ax[1].plot(self.x, self.YFFT,'b', label = 'Original')
-        if (self.filt == 'Yes'):
+        if self.filt:
             ax[1].plot(self.x, self.YF_FFT,'r', label = 'Filtered')
         ax[1].grid()
         ax[1].axis([min(self.x)-0.01*max(self.x), max(self.x), 0-0.01*max(self.YFFT), 1.05*max(self.YFFT)])
