@@ -13,7 +13,6 @@ file (csv, txt, wav, npy, ...) and plotting original and filtered data overlaid.
 import csv
 import logging
 import os
-import re
 
 import numpy as np
 import scipy.signal as sig
@@ -32,6 +31,108 @@ logger = logging.getLogger(__name__)
 classes = {'PlotDataFilt': 'Data Filt'}
 
 FILE_TYPES = ('csv', 'txt', 'wav', 'npy')
+# encodings tried in this order when reading text files ('utf-8-sig' strips an Excel BOM)
+ENCODINGS = ('utf-8-sig', 'cp1252', 'latin-1')
+DELIMITERS = ('\t', ';', ',', '|')
+COMMENT_CHARS = ('#', '%', '//')
+
+
+def _str2num(s) -> complex | float:
+    """
+    Convert a string to float (or complex), empty or non-numeric strings to NaN.
+    Decimal commas are accepted when no dot is present.
+    """
+    s = str(s).strip()
+    if ',' in s and '.' not in s:
+        s = s.replace(',', '.')
+    try:
+        return complex(s.replace('i', 'j')) if 'j' in s or 'i' in s else float(s)
+    except ValueError:
+        return np.nan
+
+
+def _is_num(s) -> bool:
+    """ Return True when string `s` can be converted to a number """
+    v = _str2num(s)
+    return not (isinstance(v, float) and np.isnan(v))
+
+
+def read_text_table(file_name: str) -> tuple[np.ndarray, list] | tuple[None, None]:
+    """
+    Read a csv / txt file into a 2D array of str and a list of column names.
+
+    More tolerant than pyfda's generic CSV import:
+    - tries several encodings (UTF-8 with / without BOM, cp1252, latin-1)
+    - skips blank and comment lines (starting with #, %, //) and metadata lines
+      whose number of fields differs from the data rows
+    - detects the delimiter from the data rows (tab ; , | or whitespace)
+    - uses the first text line with the right number of fields before the data
+      as header, e.g. "time,ch1" above a units line "s,V"
+
+    Returns (None, None) when no numeric data is found.
+    """
+    with open(file_name, 'rb') as f:
+        raw = f.read()
+    for enc in ENCODINGS:
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    lines = [ln for ln in text.splitlines()
+             if ln.strip() and not ln.lstrip().startswith(COMMENT_CHARS)]
+    if not lines:
+        logger.error("File '%s' doesn't contain any data.", file_name)
+        return None, None
+
+    # Find the delimiter that splits most of the last lines (most likely data)
+    # into the same number (> 1) of fields, fall back to whitespace
+    tail = lines[-min(len(lines), 50):]
+    delim = None
+    # A single column with decimal commas ("0,5") and a header without comma
+    # must not be split at the comma
+    single_col_dec_comma = not _is_num(lines[0]) and ',' not in lines[0]\
+        and all(ln.count(',') == 1 and _is_num(ln) for ln in tail)
+    for d in DELIMITERS:
+        if d == ',' and single_col_dec_comma:
+            continue
+        counts = [ln.count(d) for ln in tail]
+        mode = max(set(counts), key=counts.count)
+        if mode > 0 and counts.count(mode) >= 0.8 * len(counts):
+            delim = d
+            break
+
+    if delim is None:
+        rows = [ln.split() for ln in lines]
+    else:
+        rows = [[c.strip() for c in row] for row in csv.reader(lines, delimiter=delim)]
+    # drop a trailing empty field caused by a delimiter at the end of each line
+    rows_tail = rows[-len(tail):]
+    if sum(bool(r) and r[-1] == '' for r in rows_tail) >= 0.8 * len(rows_tail):
+        rows = [r[:-1] if r and r[-1] == '' else r for r in rows]
+        rows_tail = rows[-len(tail):]
+
+    # number of columns: most frequent length of the last rows containing numbers
+    lens = [len(r) for r in rows_tail if any(_is_num(c) for c in r)]
+    if not lens:
+        logger.error("File '%s' doesn't contain any numeric data.", file_name)
+        return None, None
+    n_cols = max(set(lens), key=lens.count)
+
+    # first data row: right length and at least one numeric field
+    i_data = next(i for i, r in enumerate(rows)
+                  if len(r) == n_cols and any(_is_num(c) for c in r))
+    names = [f"Col {i + 1}" for i in range(n_cols)]
+    for r in rows[:i_data]:
+        if len(r) == n_cols and not any(_is_num(c) for c in r):
+            names = [c if c else names[i] for i, c in enumerate(r)]
+            break  # use the first text line (names), not a following units line
+    data = [r for r in rows[i_data:] if len(r) == n_cols]
+    n_skipped = len(rows) - i_data - len(data)
+    if n_skipped:
+        logger.warning("Skipped %d line(s) with a number of fields different from %d.",
+                       n_skipped, n_cols)
+    return np.array(data, dtype=str), names
 
 
 class PlotDataFilt(QWidget):
@@ -64,9 +165,14 @@ class PlotDataFilt(QWidget):
         """
         self.but_load = QPushButton(self.tr("Load data ..."), self)
         self.but_load.setToolTip(self.tr(
-            "<span>Load data from a file (csv, txt, wav, npy). CSV import "
-            "uses the settings of the CSV options in the coefficient tab.</span>"))
+            "<span>Load data from a file (csv, txt, wav, npy). Delimiter, decimal "
+            "comma, header and encoding of csv / txt files are detected automatically, "
+            "comment lines (#, %, //) and metadata lines are skipped.</span>"))
         self.lbl_file = QLabel(self.tr("No file loaded"), self)
+        # warning when the sampling rate of the data doesn't match f_S of the design
+        self.lbl_fs_warn = QLabel(self)
+        self.lbl_fs_warn.setStyleSheet("QLabel {color: darkorange; font-weight: bold}")
+        self.lbl_fs_warn.setVisible(False)
 
         self.lbl_col = QLabel(self.tr("Column:"), self)
         self.cmb_col = QComboBox(self)
@@ -103,6 +209,7 @@ class PlotDataFilt(QWidget):
         lay_h_controls = QHBoxLayout()
         lay_h_controls.addWidget(self.but_load)
         lay_h_controls.addWidget(self.lbl_file)
+        lay_h_controls.addWidget(self.lbl_fs_warn)
         lay_h_controls.addWidget(self.lbl_col)
         lay_h_controls.addWidget(self.cmb_col)
         lay_h_controls.addWidget(self.lbl_time)
@@ -171,7 +278,10 @@ class PlotDataFilt(QWidget):
             file_types=FILE_TYPES)
         if file_name is None:  # operation cancelled
             return
-        self.load_file(file_name, file_type)
+        try:
+            self.load_file(file_name, file_type)
+        except Exception as e:  # never let a malformed file crash the application
+            logger.error("Couldn't load '%s':\n%s: %s", file_name, type(e).__name__, e)
 
     # ------------------------------------------------------------------------------
     def load_file(self, file_name: str, file_type: str) -> bool:
@@ -179,7 +289,11 @@ class PlotDataFilt(QWidget):
         Load data from `file_name`, convert it to a 2D float array with one
         column per channel and populate the column combo boxes.
         """
-        data = io.file2array(file_name, file_type, as_str=True)
+        col_names = None
+        if file_type in {'csv', 'txt'}:
+            data, col_names = read_text_table(file_name)
+        else:
+            data = io.file2array(file_name, file_type, as_str=True)
         if data is None:
             logger.error("Couldn't load data from '%s'.", file_name)
             return False
@@ -193,13 +307,10 @@ class PlotDataFilt(QWidget):
             data = self._to_float(data)
             if data is None:
                 return False
-            # drop header row(s) not removed by the csv import (all cells non-numeric)
-            while len(data) > 1 and np.all(np.isnan(data[0])):
-                data = data[1:]
 
         self.data = data
         self.file_name = file_name
-        self.col_names = self._read_col_names(file_name, file_type, data.shape[1])
+        self.col_names = col_names or [f"Col {i + 1}" for i in range(data.shape[1])]
         self.lbl_file.setText(os.path.basename(file_name))
         self.lbl_file.setToolTip(file_name)
         logger.info("Loaded %d samples x %d column(s) from '%s'.",
@@ -212,11 +323,19 @@ class PlotDataFilt(QWidget):
         self.cmb_time.clear()
         self.cmb_time.addItem("n / f_S")
         self.cmb_time.addItems(self.col_names)
-        # When there are several columns and the first one is monotonically increasing,
-        # assume it's a time column and preselect the second column for filtering
-        if data.shape[1] > 1 and np.all(np.diff(data[:, 0].real) > 0):
+        # When there are several columns and the first one is increasing,
+        # assume it's a time column and preselect it
+        t0 = data[:, 0].real
+        is_time = data.shape[1] > 1 and not np.any(np.isnan(t0))\
+            and np.all(np.diff(t0) >= 0) and t0[-1] > t0[0]
+        if is_time:
             self.cmb_time.setCurrentIndex(1)
-            self.cmb_col.setCurrentIndex(1)
+        # Preselect the first data column that contains numbers
+        # (e.g. skip a column with time stamps that couldn't be converted)
+        for i in range(1 if is_time else 0, data.shape[1]):
+            if not np.all(np.isnan(data[:, i])):
+                self.cmb_col.setCurrentIndex(i)
+                break
         self.cmb_col.blockSignals(False)
         self.cmb_time.blockSignals(False)
 
@@ -230,16 +349,12 @@ class PlotDataFilt(QWidget):
         Convert array of str to float (or complex), treating empty or non-numeric
         cells as NaN. Decimal commas are accepted when no dot is present.
         """
-        def conv(s):
-            s = str(s).strip()
-            if ',' in s and '.' not in s:
-                s = s.replace(',', '.')
-            try:
-                return complex(s.replace('i', 'j')) if 'j' in s or 'i' in s else float(s)
-            except ValueError:
-                return np.nan
         try:
-            out = np.vectorize(conv, otypes=[complex])(data)
+            return data.astype(float)  # fast path for plain numbers
+        except (TypeError, ValueError):
+            pass
+        try:
+            out = np.vectorize(_str2num, otypes=[complex])(data)
         except (TypeError, ValueError) as e:
             logger.error("Couldn't convert data to numbers:\n%s", e)
             return None
@@ -249,34 +364,6 @@ class PlotDataFilt(QWidget):
         if not np.any(np.iscomplex(out)):
             out = out.real
         return out
-
-    # ------------------------------------------------------------------------------
-    @staticmethod
-    def _read_col_names(file_name: str, file_type: str, n_cols: int) -> list:
-        """
-        Try to read column names from the header line of a csv / txt file,
-        otherwise return generic names.
-        """
-        names = [f"Col {i + 1}" for i in range(n_cols)]
-        if file_type not in {'csv', 'txt'}:
-            return names
-        try:
-            with open(file_name, 'r', newline=None) as f:
-                line = f.readline()
-        except (IOError, UnicodeDecodeError):
-            return names
-        if not line.strip() or re.fullmatch(r'[eEjJ()0-9,;:|\.\+\-\s]+', line.strip()):
-            return names  # empty or no header (only numeric characters)
-        delim = params['CSV']['delimiter']
-        if delim.lower() == 'auto':
-            try:
-                delim = csv.Sniffer().sniff(line, delimiters=['\t', ';', ',', '|', ' ']).delimiter
-            except csv.Error:
-                return names
-        header = [h.strip() for h in next(csv.reader([line], delimiter=delim))]
-        if len(header) == n_cols:
-            return [h if h else names[i] for i, h in enumerate(header)]
-        return names
 
     # ------------------------------------------------------------------------------
     def select_data(self):
@@ -353,8 +440,45 @@ class PlotDataFilt(QWidget):
         return n / f_s, fb_get('plt_t_label')
 
     # ------------------------------------------------------------------------------
+    def _check_f_s(self) -> None:
+        """
+        Estimate the sampling rate from the selected time column (assumed to be in
+        seconds) and show a warning when it doesn't match f_S of the design: the
+        filter frequencies are relative to f_S, a wrong f_S shifts them.
+        """
+        idx = self.cmb_time.currentIndex()
+        msg = ""
+        if self.data is not None and idx > 0 and len(self.data) > 1:
+            dt = np.diff(self.data[:, idx - 1].real)
+            dt = dt[np.isfinite(dt)]
+            if len(dt) and np.median(dt) > 0:
+                f_s_data = 1. / np.median(dt)
+                f_s_unit = fb_get('freq_specs_unit')
+                if f_s_unit in {'f_S', 'f_Ny'}:  # normalized frequencies
+                    msg = self.tr("Data sampled at {0:.6g} Hz, set f_S = {0:.6g} Hz in "
+                                  "'Specs'").format(f_s_data)
+                else:
+                    f_s_design = fb_get('f_s') * fb_get('f_s_scale')  # in Hz
+                    if abs(f_s_design / f_s_data - 1) > 0.01:
+                        msg = self.tr("Data sampled at {0:.6g} Hz but f_S = {1:.6g} Hz"
+                                      ).format(f_s_data, f_s_design)
+                if msg and np.max(dt) > 1.1 * np.min(dt):
+                    msg += self.tr(" (non-uniform sampling)")
+        if msg:
+            self.lbl_fs_warn.setToolTip(self.tr(
+                "<span>The sampling rate is estimated from the time column '{0}' "
+                "(assumed to be in seconds). The filter frequencies are specified "
+                "relative to f_S, so f_S must match the sampling rate of the data."
+                "</span>").format(self.col_names[idx - 1]))
+            if msg != self.lbl_fs_warn.text():
+                logger.warning(msg)
+        self.lbl_fs_warn.setText(msg)
+        self.lbl_fs_warn.setVisible(bool(msg))
+
+    # ------------------------------------------------------------------------------
     def draw(self):
         """ (Re-)draw the figure """
+        self._check_f_s()
         self.mplwidget.fig.clf()
         if self.chk_spectrum.isChecked():
             self.ax_t = self.mplwidget.fig.add_subplot(2, 1, 1)

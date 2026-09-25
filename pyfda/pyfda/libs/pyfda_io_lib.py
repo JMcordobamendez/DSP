@@ -582,7 +582,7 @@ def csv2array(f: TextIO) -> np.ndarray[str] | None:
     # ------- Convert list to an array of str --------------------
     try:
         data_arr = np.array(data_list)
-    except np.exception.VisibleDeprecationWarning as e:
+    except getattr(np, 'exceptions', np).VisibleDeprecationWarning as e:
         # prevent creation of numpy arrays from nested ragged sequences
         logger.error("numpy deprecation warning treated as error: %s", e)
         return None
