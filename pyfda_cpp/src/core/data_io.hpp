@@ -40,8 +40,18 @@ DataTable load_data_file(const std::string &file_name);
 /// True when column `col` looks like a time axis (monotonic increasing, no NaN)
 bool is_time_column(const DataTable &t, size_t col);
 
+/// Format of exported CSV files (pyfda's CSV options): ',' / ';' / tab as
+/// delimiter and optionally ',' as decimal separator (e.g. for a Spanish Excel)
+struct CsvFormat {
+    char delimiter = ',';
+    bool decimal_comma = false;  // ignored with ',' as delimiter
+};
+
+/// `x` with 17 significant digits in the given CSV format
+std::string csv_number(double x, const CsvFormat &fmt = {});
+
 /// Write time axis, original and filtered data as CSV
 void write_csv(const std::string &file_name, const std::vector<std::string> &header,
-               const std::vector<const Vec *> &columns);
+               const std::vector<const Vec *> &columns, const CsvFormat &fmt = {});
 
 }  // namespace pyfda

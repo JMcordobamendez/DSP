@@ -1,4 +1,5 @@
 #include "coeffs_tab.hpp"
+#include "settings.hpp"
 
 #include "filter_io.hpp"
 #include "logger.hpp"
@@ -268,8 +269,10 @@ void CoeffsView::exportDialog() {
     const QString table = tr("CSV table of the current view (*.csv)");
     filters << table;
     QString selected = filters[0];
-    QString fn = QFileDialog::getSaveFileName(this, tr("Export coefficients"), QString(), filters.join(";;"), &selected);
+    QString fn = QFileDialog::getSaveFileName(this, tr("Export coefficients"), config::dir("export"),
+                                              filters.join(";;"), &selected);
     if (fn.isEmpty()) return;
+    config::setDir("export", fn);
     if (selected == table) {
         if (QFileInfo(fn).suffix().isEmpty()) fn += ".csv";
         QFile f(fn);
@@ -278,7 +281,10 @@ void CoeffsView::exportDialog() {
             return;
         }
         redrawNow();
-        QTextStream(&f) << asText(',');
+        const pyfda::CsvFormat fmt = config::csvFormat();
+        QString text = asText(QChar(fmt.delimiter));
+        if (fmt.decimal_comma && fmt.delimiter != ',') text.replace('.', ',');
+        QTextStream(&f) << text;
         Logger::info(tr("Exported the coefficient table to '%1'.").arg(fn));
         return;
     }

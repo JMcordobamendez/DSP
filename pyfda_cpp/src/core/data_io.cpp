@@ -444,17 +444,26 @@ bool is_time_column(const DataTable &t, size_t col) {
     return t.at(t.n_rows - 1, col) > t.at(0, col);
 }
 
+std::string csv_number(double x, const CsvFormat &fmt) {
+    std::ostringstream o;
+    o.imbue(std::locale::classic());
+    o.precision(17);
+    o << x;
+    std::string s = o.str();
+    if (fmt.decimal_comma && fmt.delimiter != ',') std::replace(s.begin(), s.end(), '.', ',');
+    return s;
+}
+
 void write_csv(const std::string &file_name, const std::vector<std::string> &header,
-               const std::vector<const Vec *> &columns) {
+               const std::vector<const Vec *> &columns, const CsvFormat &fmt) {
     std::ofstream f(file_name, std::ios::binary);
     if (!f) throw DesignError("Couldn't write '" + file_name + "'.");
-    f.imbue(std::locale::classic());
-    f.precision(17);
-    for (size_t i = 0; i < header.size(); ++i) f << (i ? "," : "") << header[i];
+    const std::string d(1, fmt.delimiter);
+    for (size_t i = 0; i < header.size(); ++i) f << (i ? d : "") << header[i];
     f << "\r\n";
     const size_t n = columns.empty() ? 0 : columns[0]->size();
     for (size_t r = 0; r < n; ++r) {
-        for (size_t c = 0; c < columns.size(); ++c) f << (c ? "," : "") << (*columns[c])[r];
+        for (size_t c = 0; c < columns.size(); ++c) f << (c ? d : "") << csv_number((*columns[c])[r], fmt);
         f << "\r\n";
     }
     if (!f) throw DesignError("Couldn't write '" + file_name + "'.");

@@ -114,6 +114,18 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "formula stimulus failed with exit code $($p.ExitCode)" }
           $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/lowpass_50Hz.json', '--stim-file', 'tran.csv', '--tran-export', 'tran_file.csv' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "file stimulus failed with exit code $($p.ExitCode)" }
+          # configuration: the session is saved on close and restored on the next start, CSV format from the INI file
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--config-dir', 'cfg', '--load-filter', 'pyfda_cpp/examples/ma_lowpass.json', '--quit' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "saving the session failed with exit code $($p.ExitCode)" }
+          if (-not (Test-Path cfg/pyfda/pyfda_cpp_session.json)) { throw "the session was not saved" }
+          Add-Content cfg/pyfda/pyfda_cpp.ini "`n[csv]`ndelimiter=semicolon`ndecimal_comma=true"
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--config-dir', 'cfg', '--save-filter', 'session.json', '--stim', 'sine', '--tran-export', 'tran_es.csv' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "restoring the session failed with exit code $($p.ExitCode)" }
+          $saved = Get-Content session.json -Raw | ConvertFrom-Json
+          $orig = Get-Content ma.json -Raw | ConvertFrom-Json
+          if (($saved.spec | ConvertTo-Json) -ne ($orig.spec | ConvertTo-Json)) { throw "the restored session differs from the saved one" }
+          $l = Get-Content tran_es.csv -TotalCount 3
+          if ($l[0] -ne 'n;t;x;y' -or $l[2] -notmatch '^1;0,') { throw "CSV format from the configuration not used: $l" }
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

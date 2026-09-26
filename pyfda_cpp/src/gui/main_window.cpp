@@ -9,13 +9,23 @@
 #include "logger.hpp"
 #include "response_tabs.hpp"
 #include "spec_panel.hpp"
+#include "settings.hpp"
 #include "tran_tab.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QCloseEvent>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QLabel>
 #include <QDateTime>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QDir>
+#include <QSettings>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
@@ -62,12 +72,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_log->setReadOnly(true);
     m_log->setMaximumBlockCount(2000);
 
-    auto *right = new QSplitter(Qt::Vertical, this);
+    auto *right = m_split_right = new QSplitter(Qt::Vertical, this);
     right->addWidget(m_tabs);
     right->addWidget(m_log);
     right->setStretchFactor(0, 5);
     right->setStretchFactor(1, 1);
-    auto *main = new QSplitter(Qt::Horizontal, this);
+    auto *main = m_split_main = new QSplitter(Qt::Horizontal, this);
     main->addWidget(scroll);
     main->addWidget(right);
     main->setStretchFactor(1, 1);
@@ -76,12 +86,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     auto *file = menuBar()->addMenu(tr("&File"));
     file->addAction(tr("&Design filter"), QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { design(); });
     file->addAction(tr("&Open filter ..."), QKeySequence::Open, this, [this] {
-        const QString fn = QFileDialog::getOpenFileName(this, tr("Open filter"), m_filter_dir,
+        const QString fn = QFileDialog::getOpenFileName(this, tr("Open filter"), config::dir("filter"),
                                                         tr("pyfda_cpp filter (*.json);;All files (*)"));
         if (!fn.isEmpty()) openFilter(fn);
     });
     file->addAction(tr("&Save filter ..."), QKeySequence::Save, this, [this] {
-        QString fn = QFileDialog::getSaveFileName(this, tr("Save filter"), m_filter_dir,
+        QString fn = QFileDialog::getSaveFileName(this, tr("Save filter"), config::dir("filter"),
                                                   tr("pyfda_cpp filter (*.json)"));
         if (fn.isEmpty()) return;
         if (QFileInfo(fn).suffix().isEmpty()) fn += ".json";
@@ -95,7 +105,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         QMetaObject::invokeMethod(m_data_filt, "onLoad");
     });
     file->addSeparator();
-    file->addAction(tr("&Quit"), QKeySequence::Quit, qApp, &QApplication::quit);
+    file->addAction(tr("&Preferences ..."), this, &MainWindow::preferences);
+    file->addSeparator();
+    file->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close);
     auto *tools = menuBar()->addMenu(tr("&Tools"));
     tools->addAction(tr("&Window viewer ..."), this, [this] {
         auto *v = new WindowViewer(this);
@@ -171,7 +183,7 @@ bool MainWindow::designManual(const FilterSpec &manual) {
     return design();
 }
 
-bool MainWindow::openFilter(const QString &file_name) {
+bool MainWindow::openFilter(const QString &file_name, bool session) {
     QFile f(file_name);
     if (!f.open(QIODevice::ReadOnly)) {
         Logger::error(tr("Couldn't open '%1'.").arg(file_name));
@@ -185,9 +197,9 @@ bool MainWindow::openFilter(const QString &file_name) {
         Logger::error(tr("'%1': %2").arg(QFileInfo(file_name).fileName(), e.what()));
         return false;
     }
-    m_filter_dir = QFileInfo(file_name).absolutePath();
+    if (!session) config::setDir("filter", file_name);
     m_specs->setSpec(ff.spec, QString::fromStdString(ff.unit));
-    Logger::info(tr("Loaded filter '%1'.").arg(file_name));
+    Logger::info(session ? tr("Restored the design of the last session.") : tr("Loaded filter '%1'.").arg(file_name));
     if (!design()) return false;
     if (ff.has_fx) m_fix->setSpec(ff.fx, ff.fx_sim);
     // the stored coefficients are only for reference, warn if the design differs
@@ -219,7 +231,7 @@ bool MainWindow::saveFilter(const QString &file_name) {
         Logger::error(tr("Couldn't write '%1'.").arg(file_name));
         return false;
     }
-    m_filter_dir = QFileInfo(file_name).absolutePath();
+    config::setDir("filter", file_name);
     Logger::info(tr("Saved filter to '%1'.").arg(file_name));
     return true;
 }
@@ -236,4 +248,69 @@ void MainWindow::onLog(int level, const QString &text) {
     QString html = QString("[%1] <b>%2</b>: %3").arg(time, names[level], text.toHtmlEscaped().replace("\n", "<br>"));
     if (level > 0) html = QString("<span style='color:%1'>%2</span>").arg(colors[level], html);
     m_log->appendHtml(html);
+}
+
+void MainWindow::restoreSession() {
+    QSettings s;
+    if (s.contains("window/geometry")) restoreGeometry(s.value("window/geometry").toByteArray());
+    m_split_main->restoreState(s.value("window/split_main").toByteArray());
+    m_split_right->restoreState(s.value("window/split_right").toByteArray());
+    if (config::restoreSession() && QFileInfo::exists(config::sessionFile())) openFilter(config::sessionFile(), true);
+    m_tabs->setCurrentIndex(qBound(0, s.value("window/tab", 0).toInt(), m_tabs->count() - 1));
+}
+
+void MainWindow::saveSession() {
+    QSettings s;
+    s.setValue("window/geometry", saveGeometry());
+    s.setValue("window/split_main", m_split_main->saveState());
+    s.setValue("window/split_right", m_split_right->saveState());
+    s.setValue("window/tab", m_tabs->currentIndex());
+    s.sync();  // creates the directory of the INI file
+    if (m_design && config::restoreSession()) {
+        const std::string text =
+            filter_to_json(*m_design, m_specs->unitKey().toStdString(), &m_fix->spec(), m_fix->simulate());
+        QFile f(config::sessionFile());
+        if (!f.open(QIODevice::WriteOnly) || f.write(text.data(), qint64(text.size())) != qint64(text.size()))
+            Logger::error(tr("Couldn't write '%1'.").arg(config::sessionFile()));
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent *e) {
+    saveSession();
+    QApplication::closeAllWindows();  // e.g. window viewers
+    e->accept();
+}
+
+void MainWindow::preferences() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Preferences"));
+    auto *form = new QFormLayout(&dlg);
+    auto *restore = new QCheckBox(tr("Restore the design and the window of the last session"), &dlg);
+    restore->setChecked(config::restoreSession());
+    form->addRow(tr("Start:"), restore);
+    auto *delim = new QComboBox(&dlg);
+    delim->addItem(tr("Comma ,"), "comma");
+    delim->addItem(tr("Semicolon ;"), "semicolon");
+    delim->addItem(tr("Tab"), "tab");
+    QSettings s;
+    delim->setCurrentIndex(qMax(0, delim->findData(s.value("csv/delimiter", "comma"))));
+    form->addRow(tr("CSV delimiter:"), delim);
+    auto *comma = new QCheckBox(tr("Decimal comma (e.g. 0,5)"), &dlg);
+    comma->setToolTip(tr("For spreadsheets with a comma as decimal separator, needs ';' or tab as delimiter"));
+    comma->setChecked(s.value("csv/decimal_comma", false).toBool());
+    auto update = [=] { comma->setEnabled(delim->currentData() != "comma"); };
+    connect(delim, &QComboBox::currentIndexChanged, &dlg, update);
+    update();
+    form->addRow(tr("CSV numbers:"), comma);
+    auto *file = new QLabel(QDir::toNativeSeparators(config::iniFile()), &dlg);
+    file->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    form->addRow(tr("Configuration file:"), file);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    form->addRow(buttons);
+    if (dlg.exec() != QDialog::Accepted) return;
+    s.setValue("session/restore", restore->isChecked());
+    s.setValue("csv/delimiter", delim->currentData());
+    s.setValue("csv/decimal_comma", comma->isChecked());
 }

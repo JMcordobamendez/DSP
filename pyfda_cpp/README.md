@@ -154,6 +154,23 @@ pyfda usa `N` como número de coeficientes en el método de ventana.
   pérdida de scalloping, ancho de banda a 3 y 6 dB y lóbulo lateral máximo. Comparado con
   los valores calculados en numpy.
 
+## Fase 9: fichero de configuración
+
+Como el `pyfda_user.conf` de pyfda, en un fichero INI legible
+(`~/.config/pyfda/pyfda_cpp.ini`, en Windows `%APPDATA%\pyfda\pyfda_cpp.ini`), editable
+también desde **File → Preferences ...**:
+
+* **Sesión**: al cerrar se guardan el diseño (`pyfda_cpp_session.json`, junto al INI, con
+  la coma fija), el tamaño de la ventana, los divisores y la pestaña; al arrancar se
+  restauran (se puede desactivar).
+* **Carpetas**: los diálogos recuerdan la última carpeta de filtros, de datos y de exportación.
+* **Formato CSV** de las exportaciones (datos filtrados, análisis transitorio, tabla de
+  coeficientes): separador `,`, `;` o tabulador y **coma decimal** (p. ej. para un Excel
+  en español). Data Filt vuelve a leer esos ficheros.
+
+`--config-dir carpeta` usa otra carpeta de configuración y `--quit` cierra la ventana al
+momento (guardando la sesión), para las pruebas.
+
 ## Verificación
 
 ```
@@ -185,13 +202,13 @@ Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 `--save-filter f.json`, `--stim sine`, `--formula "sin(2*pi*f1*n)"`, `--stim-file x.csv`, `--tran-export t.csv`, `--fixpoint`,
 `--export-hdl filtro.vhd|.v|.coe`, `--hdl-testbench`, `--data fichero`,
 `--filter`, `--export salida.csv`, `--manual-ba "1,2,1/1,-0.5"`,
-`--manual-zpk "0.5:0.5,0.5:-0.5/0.9/2"`, `--screenshot carpeta`.
+`--manual-zpk "0.5:0.5,0.5:-0.5/0.9/2"`, `--screenshot carpeta`, `--config-dir carpeta`, `--quit`.
 
 ## Pendiente para siguientes fases
 
 * En el análisis transitorio: estímulos complejos (exp, `j` en fórmulas). Gráfica 3D.
 * Edición de polos/ceros arrastrándolos en la gráfica P/Z.
-* Fichero de configuración y traducciones.
+* Traducciones.
 * Ventana `general_gaussian`.
 * Datos complejos en Data Filt (ahora solo reales).
 

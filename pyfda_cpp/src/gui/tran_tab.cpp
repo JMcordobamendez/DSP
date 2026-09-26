@@ -1,4 +1,5 @@
 #include "tran_tab.hpp"
+#include "settings.hpp"
 
 #include "conversions.hpp"
 #include "data_io.hpp"
@@ -338,17 +339,21 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
         changed();
     });
     connect(m_load, &QPushButton::clicked, this, [this] {
-        const QString fn = QFileDialog::getOpenFileName(this, tr("Load stimulus"), QString(),
+        const QString fn = QFileDialog::getOpenFileName(this, tr("Load stimulus"), config::dir("data"),
                                                         tr("Data files (*.csv *.txt *.dat *.wav *.npy);;All files (*)"));
-        if (!fn.isEmpty()) loadStimFile(fn);
+        if (fn.isEmpty()) return;
+        config::setDir("data", fn);
+        loadStimFile(fn);
     });
     connect(m_file_norm, &QCheckBox::toggled, this, [this] {
         applyFileNorm();
         changed();
     });
     connect(exp, &QPushButton::clicked, this, [this] {
-        QString fn = QFileDialog::getSaveFileName(this, tr("Export transient data"), QString(), tr("CSV (*.csv)"));
+        QString fn = QFileDialog::getSaveFileName(this, tr("Export transient data"), config::dir("export"),
+                                          tr("CSV (*.csv)"));
         if (fn.isEmpty()) return;
+        config::setDir("export", fn);
         if (QFileInfo(fn).suffix().isEmpty()) fn += ".csv";
         saveCsv(fn);
     });
@@ -807,11 +812,13 @@ bool TranView::saveCsv(const QString &file_name) {
         Logger::error(tr("Couldn't write '%1'.").arg(file_name));
         return false;
     }
+    const CsvFormat fmt = config::csvFormat();
+    const QChar d(fmt.delimiter);
+    auto num = [&](double v) { return QString::fromStdString(csv_number(v, fmt)); };
     QTextStream s(&f);
-    s << "n,t,x,y\n";
+    s << "n" << d << "t" << d << "x" << d << "y\n";
     for (size_t n = size_t(m_n_start); n < m_x.size(); ++n)
-        s << n << "," << QString::number(double(n) / m_ctx.f_s, 'g', 17) << "," << QString::number(m_x[n], 'g', 17)
-          << "," << QString::number(m_y[n], 'g', 17) << "\n";
+        s << n << d << num(double(n) / m_ctx.f_s) << d << num(m_x[n]) << d << num(m_y[n]) << "\n";
     Logger::info(tr("Exported transient data to '%1'.").arg(file_name));
     return true;
 }

@@ -16,6 +16,9 @@
 //   --manual-ba <b/a>      enter coefficients in the Coeffs tab editor, e.g. "1,2,1/1,-0.5", and apply
 //   --manual-zpk <z/p/k>   enter poles / zeros, e.g. "0.5:0.5,0.5:-0.5/0.9/2" (re:im pairs), and apply
 //   --screenshot <dir>     save a screenshot of every tab and quit
+//   --config-dir <dir>     directory of the configuration (default: the user's config directory),
+//                          the INI file is <dir>/pyfda/pyfda_cpp.ini
+//   --quit                 close the window right away like the user (saves the session)
 #include "coeffs_tab.hpp"
 #include "data_filt_tab.hpp"
 #include "fixpoint_tab.hpp"
@@ -26,6 +29,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QSettings>
 #include <QTabWidget>
 #include <QTimer>
 
@@ -34,6 +38,8 @@ int main(int argc, char *argv[]) {
     QApplication::setApplicationName("pyfda_cpp");
     QApplication::setOrganizationName("pyfda");
     QApplication::setApplicationVersion("0.1.0");
+    // readable configuration file like pyfda's pyfda_user.conf (also on Windows instead of the registry)
+    QSettings::setDefaultFormat(QSettings::IniFormat);
 
     QCommandLineParser parser;
     parser.setApplicationDescription("C++ port of pyfda");
@@ -56,13 +62,18 @@ int main(int argc, char *argv[]) {
     QCommandLineOption optManBa("manual-ba", "Enter b / a in the coefficient editor and apply, e.g. 1,2,1/1,-0.5.", "b/a");
     QCommandLineOption optManZpk("manual-zpk", "Enter zeros / poles / gain in the P/Z editor and apply, "
                                                "e.g. 0.5:0.5,0.5:-0.5/0.9/2.", "z/p/k");
-    parser.addOptions({optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp, optFix,
+    QCommandLineOption optConf("config-dir", "Directory of the configuration file.", "dir");
+    QCommandLineOption optQuit("quit", "Close the main window right away (saves the session).");
+    parser.addOptions({optConf, optQuit, optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp, optFix,
                        optHdl, optTb, optManBa, optManZpk, optFormula, optStimFile});
     parser.process(app);
+    if (parser.isSet(optConf))
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QDir(parser.value(optConf)).absolutePath());
 
     MainWindow w;
     w.show();
     int rc = 0;
+    if (!parser.isSet(optLoadFilt)) w.restoreSession();
     if (parser.isSet(optLoadFilt) && !w.openFilter(parser.value(optLoadFilt))) rc = 1;
     // manual coefficients / poles and zeros go through the editor of the Coeffs tab
     auto manual = [&](const QString &arg, bool zpk) {
@@ -133,6 +144,10 @@ int main(int argc, char *argv[]) {
         wv.show();
         app.processEvents();
         wv.grab().save(QString("%1/window_viewer.png").arg(dir));
+        return rc;
+    }
+    if (parser.isSet(optQuit)) {
+        w.close();
         return rc;
     }
     if (parser.isSet(optExport) || parser.isSet(optSaveFilt) || parser.isSet(optTranExp) || parser.isSet(optHdl))

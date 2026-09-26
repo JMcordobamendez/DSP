@@ -1,4 +1,5 @@
 #include "plot_widget.hpp"
+#include "settings.hpp"
 
 #include <QApplication>
 #include <QClipboard>
@@ -556,8 +557,11 @@ void PlotWidget::contextMenuEvent(QContextMenuEvent *e) {
     } else if (a == copy) {
         QApplication::clipboard()->setPixmap(grab());
     } else if (a == save) {
-        const QString f = QFileDialog::getSaveFileName(this, tr("Save image"), QString(), tr("PNG image (*.png)"));
-        if (!f.isEmpty()) savePng(f);
+        const QString f = QFileDialog::getSaveFileName(this, tr("Save image"), config::dir("export"),
+                                                       tr("PNG image (*.png)"));
+        if (f.isEmpty()) return;
+        config::setDir("export", f);
+        savePng(f);
     }
 }
 

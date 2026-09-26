@@ -1,4 +1,5 @@
 #include "fixpoint_tab.hpp"
+#include "settings.hpp"
 
 #include "conversions.hpp"
 #include "hdl_export.hpp"
@@ -143,8 +144,10 @@ FixpointView::FixpointView(QWidget *parent) : DesignView(parent) {
     connect(m_sim, &QCheckBox::toggled, this, [this] { emit fxChanged(); });
     connect(m_base, &QComboBox::currentIndexChanged, this, [this] { redrawNow(); });
     connect(m_coe, &QPushButton::clicked, this, [this] {
-        QString fn = QFileDialog::getSaveFileName(this, tr("Export COE file"), QString(), tr("Xilinx COE (*.coe)"));
+        QString fn = QFileDialog::getSaveFileName(this, tr("Export COE file"), config::dir("export"),
+                                                  tr("Xilinx COE (*.coe)"));
         if (fn.isEmpty()) return;
+        config::setDir("export", fn);
         if (QFileInfo(fn).suffix().isEmpty()) fn += ".coe";
         exportFile(fn);
     });
@@ -152,8 +155,10 @@ FixpointView::FixpointView(QWidget *parent) : DesignView(parent) {
         const QStringList filters = {tr("VHDL (*.vhd *.vhdl)"), tr("VHDL with testbench (*.vhd *.vhdl)"),
                                      tr("Verilog (*.v)"), tr("Verilog with testbench (*.v)")};
         QString selected = filters[1];
-        QString fn = QFileDialog::getSaveFileName(this, tr("Export HDL"), QString(), filters.join(";;"), &selected);
+        QString fn = QFileDialog::getSaveFileName(this, tr("Export HDL"), config::dir("export"), filters.join(";;"),
+                                                  &selected);
         if (fn.isEmpty()) return;
+        config::setDir("export", fn);
         const int idx = std::max<qsizetype>(0, filters.indexOf(selected));
         if (QFileInfo(fn).suffix().isEmpty()) fn += idx < 2 ? ".vhd" : ".v";
         exportFile(fn, idx % 2 == 1);

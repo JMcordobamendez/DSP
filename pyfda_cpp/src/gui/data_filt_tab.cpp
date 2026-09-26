@@ -12,6 +12,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include "settings.hpp"
+
 #include <QSettings>
 #include <QSplitter>
 #include <QVBoxLayout>
@@ -90,14 +92,12 @@ DataFiltView::DataFiltView(QWidget *parent) : DesignView(parent) {
 }
 
 void DataFiltView::onLoad() {
-    QSettings settings;
-    const QString dir = settings.value("data_dir").toString();
     const QString fn = QFileDialog::getOpenFileName(
-        this, tr("Load data to be filtered"), dir,
+        this, tr("Load data to be filtered"), config::dir("data"),
         tr("Data files (*.csv *.txt *.wav *.npy);;CSV (*.csv);;Text (*.txt);;Wave (*.wav);;"
            "Numpy (*.npy);;All files (*)"));
     if (fn.isEmpty()) return;
-    settings.setValue("data_dir", QFileInfo(fn).absolutePath());
+    config::setDir("data", fn);
     loadFile(fn);
 }
 
@@ -326,10 +326,10 @@ void DataFiltView::redraw() {
 
 void DataFiltView::exportData() {
     if (!m_y) return;
-    QSettings settings;
-    const QString fn = QFileDialog::getSaveFileName(this, tr("Export filtered data"),
-                                                    settings.value("data_dir").toString(), tr("CSV (*.csv)"));
+    const QString fn = QFileDialog::getSaveFileName(this, tr("Export filtered data"), config::dir("export"),
+                                                    tr("CSV (*.csv)"));
     if (fn.isEmpty()) return;
+    config::setDir("export", fn);
     saveCsv(fn);
 }
 
@@ -339,7 +339,7 @@ bool DataFiltView::saveCsv(const QString &file_name) {
     const Vec t = timeAxis(t_label);
     const std::string name = m_cmb_col->currentText().toStdString();
     try {
-        write_csv(QFile::encodeName(file_name).toStdString(), {"t", name, name + "_filtered"}, {&t, &m_x, &*m_y});
+        write_csv(QFile::encodeName(file_name).toStdString(), {"t", name, name + "_filtered"}, {&t, &m_x, &*m_y}, config::csvFormat());
         Logger::info(tr("Exported filtered data to '%1'.").arg(file_name));
         return true;
     } catch (const std::exception &e) {
