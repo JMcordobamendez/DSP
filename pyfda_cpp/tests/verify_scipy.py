@@ -1,0 +1,409 @@
+#!/usr/bin/env python3
+"""
+Compare the results of the pyfda C++ core (via build/pyfda_cli) with scipy.signal.
+
+Usage: python tests/verify_scipy.py path/to/pyfda_cli
+Exit code 0 when all checks pass.
+"""
+import json
+import math
+import os
+import subprocess
+import sys
+import tempfile
+
+import numpy as np
+import scipy.signal as sig
+
+CLI = sys.argv[1] if len(sys.argv) > 1 else os.path.join("build", "pyfda_cli")
+proc = subprocess.Popen([CLI], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+n_pass = n_fail = 0
+rng = np.random.default_rng(1)
+
+
+def call(line: str) -> dict:
+    proc.stdin.write(line + "\n")
+    proc.stdin.flush()
+    return json.loads(proc.stdout.readline())
+
+
+def L(v) -> str:
+    return ",".join(repr(float(x)) for x in np.ravel(v))
+
+
+def cplx(v):
+    return np.array([complex(a, b) for a, b in v])
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    global n_pass, n_fail
+    if ok:
+        n_pass += 1
+    else:
+        n_fail += 1
+        print(f"FAIL {name} {detail}")
+
+
+def close(name, got, ref, rtol=1e-9, atol=0.0):
+    got, ref = np.asarray(got), np.asarray(ref)
+    if got.shape != ref.shape:
+        check(name, False, f"shape {got.shape} != {ref.shape}")
+        return
+    scale = max(np.max(np.abs(ref)), 1e-300) if ref.size else 1
+    err = np.max(np.abs(got - ref)) / scale if ref.size else 0
+    check(name, err <= rtol + atol / scale, f"rel. error {err:.3g}")
+
+
+def resp_close(name, b, a, b_ref, a_ref, tol_db=1e-6, n=2048):
+    """ compare magnitude responses in dB (relative to max), limited to -250 dB """
+    w = np.linspace(0, np.pi, n, endpoint=False)
+    h = np.abs(sig.freqz(b, a, w)[1])
+    h_ref = np.abs(sig.freqz(b_ref, a_ref, w)[1])
+    db = 20 * np.log10(np.maximum(h, 1e-300))
+    db_ref = 20 * np.log10(np.maximum(h_ref, 1e-300))
+    mask = db_ref > np.max(db_ref) - 250
+    err = np.max(np.abs(db - db_ref)[mask])
+    check(name, err <= tol_db, f"max. dB error {err:.3g}")
+
+
+# ---------------------------------------------------------------------------
+# IIR prototypes and transformations
+IIR = {'butter': lambda N, rp, rs, wn, bt: sig.butter(N, wn, bt, output='zpk'),
+       'cheby1': lambda N, rp, rs, wn, bt: sig.cheby1(N, rp, wn, bt, output='zpk'),
+       'cheby2': lambda N, rp, rs, wn, bt: sig.cheby2(N, rs, wn, bt, output='zpk'),
+       'ellip': lambda N, rp, rs, wn, bt: sig.ellip(N, rp, rs, wn, bt, output='zpk'),
+       'bessel': lambda N, rp, rs, wn, bt: sig.bessel(N, wn, bt, output='zpk')}
+for ft in IIR:
+    for bt, wn in (('low', [0.2]), ('high', [0.35]), ('bandpass', [0.2, 0.5]),
+                   ('bandstop', [0.3, 0.45])):
+        for N in (1, 2, 3, 4, 5, 8, 11):
+            rp, rs = 0.5, 55
+            r = call(f"iir {ft} {bt} {N} {rp} {rs} {L(wn)}")
+            if 'error' in r:
+                check(f"iir {ft} {bt} N={N}", False, r['error'])
+                continue
+            z, p, k = IIR[ft](N, rp, rs, wn if len(wn) > 1 else wn[0], bt)
+            name = f"iir {ft} {bt} N={N}"
+            close(name + " k", r['k'], k, 1e-9)
+            close(name + " poles", np.sort_complex(cplx(r['p'])), np.sort_complex(p), 1e-9)
+            if len(z):
+                close(name + " zeros", np.sort_complex(cplx(r['z'])), np.sort_complex(z), 1e-8)
+            sos_ref = sig.zpk2sos(z, p, k)
+            close(name + " sos", r['sos'], sos_ref, 1e-8)
+            b_ref, a_ref = sig.zpk2tf(z, p, k)
+            close(name + " b", r['b'], b_ref, 1e-8)
+            close(name + " a", r['a'], a_ref, 1e-8)
+            w = np.linspace(0, np.pi, 1024, endpoint=False)
+            h = np.abs(sig.sosfreqz(r['sos'], w)[1])
+            h_ref = np.abs(sig.sosfreqz(sos_ref, w)[1])
+            close(name + " |H(sos)|", h, h_ref, 1e-9, 1e-12)
+
+# minimum order
+ORD = {'butter': sig.buttord, 'cheby1': sig.cheb1ord, 'cheby2': sig.cheb2ord,
+       'ellip': sig.ellipord}
+for ft, fn in ORD.items():
+    for wp, ws in (([0.2], [0.3]), ([0.3], [0.2]), ([0.2, 0.5], [0.1, 0.6]),
+                   ([0.1, 0.6], [0.2, 0.5]), ([0.05], [0.07]), ([0.4, 0.42], [0.35, 0.47])):
+        for gp, gs in ((1, 40), (0.1, 80), (3, 20)):
+            r = call(f"ord {ft} {L(wp)} {L(ws)} {gp} {gs}")
+            N, Wn = fn(wp if len(wp) > 1 else wp[0], ws if len(ws) > 1 else ws[0], gp, gs)
+            name = f"ord {ft} wp={wp} ws={ws} {gp}/{gs}"
+            check(name + " N", r.get('N') == N, f"{r} vs {N}")
+            close(name + " Wn", r.get('Wn', []), np.atleast_1d(Wn), 1e-7)
+
+# ---------------------------------------------------------------------------
+# windows, firwin, kaiserord, remez
+WINDOWS = {'rectangular': lambda M, p: sig.get_window('boxcar', M, False),
+           'bartlett': lambda M, p: sig.get_window('bartlett', M, False),
+           'hann': lambda M, p: sig.get_window('hann', M, False),
+           'hamming': lambda M, p: sig.get_window('hamming', M, False),
+           'blackman': lambda M, p: sig.get_window('blackman', M, False),
+           'blackman-harris': lambda M, p: sig.get_window('blackmanharris', M, False),
+           'nuttall': lambda M, p: sig.get_window('nuttall', M, False),
+           'flattop': lambda M, p: sig.get_window('flattop', M, False),
+           'kaiser': lambda M, p: sig.get_window(('kaiser', p), M, False),
+           'gaussian': lambda M, p: sig.get_window(('gaussian', p * (M - 1) / 2), M, False),
+           'tukey': lambda M, p: sig.get_window(('tukey', p), M, False)}
+for wname, fn in WINDOWS.items():
+    for M in (2, 7, 32, 101):
+        par = {'kaiser': 6.5, 'gaussian': 0.4, 'tukey': 0.3}.get(wname, 0)
+        r = call(f"window {wname} {M} {par}")
+        close(f"window {wname} M={M}", r['w'], fn(M, par), 1e-12, 1e-15)
+
+for numtaps, cutoff, pz in ((31, [0.3], 1), (32, [0.3], 1), (41, [0.4], 0),
+                            (51, [0.2, 0.5], 0), (61, [0.2, 0.5], 1), (80, [0.1, 0.3], 0)):
+    for wname in ('hamming', 'kaiser', 'blackman'):
+        par = 8.0 if wname == 'kaiser' else 0
+        r = call(f"firwin {numtaps} {L(cutoff)} {pz} {wname} {par}")
+        win = ('kaiser', par) if wname == 'kaiser' else wname
+        h = sig.firwin(numtaps, cutoff, window=win, pass_zero=bool(pz))
+        close(f"firwin {numtaps} {cutoff} {pz} {wname}", r['h'], h, 1e-12)
+
+for ripple, width in ((60, 0.05), (40, 0.1), (21, 0.2), (90, 0.01)):
+    r = call(f"kaiserord {ripple} {width}")
+    N, beta = sig.kaiserord(ripple, width)
+    check(f"kaiserord {ripple} {width}", r['N'] == N and math.isclose(r['beta'], beta, rel_tol=1e-12),
+          f"{r} vs {N}, {beta}")
+
+REMEZ = [
+    (35, [0, 0.1, 0.15, 0.5], [1, 0], [1, 1], 'bandpass'),
+    (36, [0, 0.1, 0.15, 0.5], [1, 0], [1, 10], 'bandpass'),
+    (51, [0, 0.1, 0.15, 0.3, 0.35, 0.5], [0, 1, 0], [10, 1, 10], 'bandpass'),
+    (61, [0, 0.1, 0.15, 0.3, 0.35, 0.5], [1, 0, 1], [1, 5, 1], 'bandpass'),
+    (40, [0, 0.2, 0.25, 0.5], [0, 1], [1, 1], 'hilbert'),
+    (31, [0.05, 0.45], [1], [1], 'hilbert'),
+    (101, [0, 0.05, 0.07, 0.5], [1, 0], [1, 100], 'bandpass'),
+    (9, [0, 0.1, 0.3, 0.5], [1, 0], [1, 1], 'bandpass'),
+    (201, [0, 0.2, 0.21, 0.5], [1, 0], [1, 1], 'bandpass'),
+]
+for numtaps, bands, des, w, t in REMEZ:
+    name = f"remez {numtaps} {bands} {t}"
+    r = call(f"remez {numtaps} {L(bands)} {L(des)} {L(w)} {t} 16")
+    try:
+        h = sig.remez(numtaps, bands, des, weight=w, type=t, fs=1)
+    except ValueError as e:
+        check(name, 'error' in r, f"scipy: {e}, C++: {r}")
+        continue
+    if 'error' in r:
+        check(name, False, r['error'])
+        continue
+    close(name, r['h'], h, 1e-9)
+
+# ---------------------------------------------------------------------------
+# pyfda's remezord (filter_widgets/common.py), reimplemented here from the source
+sys.path.insert(0, os.environ.get("PYFDA_SRC", ""))
+
+
+def remezord_py(freqs, amps, rips, alg):
+    def herrmann(fp, fs, dp, ds):
+        df = fs - fp
+        a = [5.309e-3, 7.114e-2, -4.761e-1, -2.66e-3, -5.941e-1, -4.278e-1]
+        b = [11.01217, 0.51244]
+        dinf = np.log10(ds) * (a[0] * np.log10(dp)**2 + a[1] * np.log10(dp) + a[2])\
+            + a[3] * np.log10(dp)**2 + a[4] * np.log10(dp) + a[5]
+        f = b[0] + b[1] * (np.log10(dp) - np.log10(ds))
+        return int(dinf / df - f * df + 1)
+
+    def kaiser(fp, fs, dp, ds):
+        return int((-20*np.log10(np.sqrt(dp*ds))-13.0)/(14.6*(fs-fp))+1.0)
+
+    def ichige(fp, fs, dp, ds):
+        def v(df, dp):
+            return 2.325 * ((-np.log10(dp))**-0.445) * df ** (-1.39)
+
+        def g(df, fp):
+            return (2.0 / np.pi) * np.arctan(v(df, dp) * (1.0 / fp - 1.0 / (0.5 - df)))
+
+        def h(df, fp, c):
+            return (2.0/np.pi) * np.arctan((c/df)*(1.0/fp-1.0/(0.5-df)))
+        df = fs-fp
+        nc = np.ceil(1.0+(1.101/df) * (-np.log10(2.0*dp)) ** 1.1)
+        nm = (0.52/df)*np.log10(dp/ds)*(-np.log10(dp))**0.17
+        n3 = np.ceil(nc*(g(df, fp) + g(df, 0.5-df-fp) + 1.0) / 3.0)
+        dn = np.ceil(nm*(h(df, fp, 1.1) - (h(df, 0.5-df-fp, 0.29) - 1.0) / 2.0))
+        return int(n3 + dn)
+    fn = {'ichige': ichige, 'kaiser': kaiser, 'herrmann': herrmann}[alg]
+    freqs, amps, rips = (np.asarray(x, 'd') for x in (freqs, amps, rips))
+    rips = rips / (amps + (amps == 0.0))
+    f1, f2 = freqs[0:-1:2], freqs[1::2]
+    n = 0
+    for i in range(len(amps) - 1):
+        n = max(n, fn(f1[i], f2[i], rips[i], rips[i+1]), fn(0.5-f2[i], 0.5-f1[i], rips[i+1], rips[i]))
+    return n, np.hstack((0.0, freqs, 0.5)), max(rips) / rips
+
+
+for alg in ('ichige', 'kaiser', 'herrmann'):
+    for f, a, rp in (([0.1, 0.15], [1, 0], [0.01, 0.001]), ([0.2, 0.25], [0, 1], [0.001, 0.05]),
+                     ([0.1, 0.15, 0.3, 0.35], [0, 1, 0], [0.001, 0.01, 0.001])):
+        r = call(f"remezord {alg} {L(f)} {L(a)} {L(rp)}")
+        n, bands, w = remezord_py(f, a, rp, alg)
+        check(f"remezord {alg} {f}", r['N'] == n, f"{r['N']} vs {n}")
+        close(f"remezord {alg} {f} weight", r['weight'], w, 1e-12)
+
+# ---------------------------------------------------------------------------
+# filtering
+x = rng.standard_normal(500) + np.sin(np.arange(500) * 0.05) * 3 + 1.5
+for ft in ('butter', 'ellip', 'cheby2'):
+    for bt, wn in (('low', 0.1), ('high', 0.3), ('bandpass', [0.1, 0.3]), ('bandstop', [0.2, 0.4])):
+        z, p, k = IIR[ft](4, 1, 50, wn, bt)
+        sos = sig.zpk2sos(z, p, k)
+        b, a = sig.zpk2tf(z, p, k)
+        name = f"filter {ft} {bt}"
+        close(name + " sosfilt", call(f"sosfilter sosfilt {L(sos)} {L(x)}")['y'], sig.sosfilt(sos, x), 1e-10)
+        close(name + " sosfiltfilt", call(f"sosfilter sosfiltfilt {L(sos)} {L(x)}")['y'],
+              sig.sosfiltfilt(sos, x), 1e-10)
+        close(name + " lfilter", call(f"filter lfilter {L(b)} {L(a)} {L(x)}")['y'], sig.lfilter(b, a, x), 1e-8)
+        close(name + " filtfilt", call(f"filter filtfilt {L(b)} {L(a)} {L(x)}")['y'], sig.filtfilt(b, a, x), 1e-8)
+h = sig.firwin(41, 0.2)
+close("filter FIR lfilter", call(f"filter lfilter {L(h)} 1 {L(x)}")['y'], sig.lfilter(h, 1, x), 1e-12)
+close("filter FIR filtfilt", call(f"filter filtfilt {L(h)} 1 {L(x)}")['y'], sig.filtfilt(h, 1, x), 1e-12)
+
+# frequency response, group delay, roots, spectrum
+b, a = sig.ellip(6, 1, 60, 0.2)
+w = np.linspace(0.01, np.pi - 0.01, 300)
+H = cplx(call(f"freqz {L(b)} {L(a)} {L(w)}")['H'])
+close("freqz", H, sig.freqz(b, a, w)[1], 1e-9)
+sos = sig.ellip(6, 1, 60, 0.2, output='sos')
+gd = call(f"gdsos {L(sos)} {L(w)}")['gd']
+close("group delay sos", gd, sig.group_delay((b, a), w)[1], 1e-6)
+gd = call(f"gd {L(h)} 1 {L(w)}")['gd']
+close("group delay FIR", gd, np.full_like(w, 20.0), 1e-9)
+# (multiple roots are left out, they are ill-conditioned for any algorithm)
+for c in (sig.firwin(31, 0.3), sig.remez(25, [0, 0.2, 0.3, 0.5], [0, 1]), sig.firwin(151, 0.1),
+          np.poly([0.5, -0.2 + 0.3j, -0.2 - 0.3j, 2.0]), [2, 0, 0, 1, 0, 0]):
+    r = cplx(call(f"roots {L(c)}")['r'])
+    ref = np.roots(c)
+    close(f"roots deg {len(c) - 1}", np.sort_complex(np.round(r, 9)), np.sort_complex(np.round(ref, 9)), 1e-8)
+    if len(c) < 40:  # reconstruction is ill-conditioned for high orders (also with numpy)
+        close(f"roots deg {len(c) - 1} poly", np.real(np.poly(r)) * c[0], c, 1e-9)
+for n in (256, 300, 1001):
+    xs = rng.standard_normal(n)
+    A = np.abs(np.fft.rfft(xs)) / n
+    A[1:] *= 2
+    close(f"spectrum N={n}", call(f"spectrum {L(xs)}")['A'], A, 1e-10)
+
+# ---------------------------------------------------------------------------
+# high level design (pyfda filter widgets logic, with N = filter order)
+cases = [
+    ("rt=LP method=ellip fo=min f_pb=0.1 f_sb=0.15 A_PB=1 A_SB=60",
+     lambda: sig.ellip(*sig.ellipord(0.2, 0.3, 1, 60)[:1], 1, 60, sig.ellipord(0.2, 0.3, 1, 60)[1], output='sos')),
+    ("rt=HP method=cheby1 fo=min f_pb=0.2 f_sb=0.15 A_PB=0.5 A_SB=50",
+     lambda: sig.cheby1(sig.cheb1ord(0.4, 0.3, 0.5, 50)[0], 0.5, sig.cheb1ord(0.4, 0.3, 0.5, 50)[1], 'high', output='sos')),
+    ("rt=BP method=butter fo=min f_sb=0.1 f_pb=0.15 f_pb2=0.3 f_sb2=0.35 A_PB=1 A_SB=40",
+     lambda: sig.butter(*sig.buttord([0.3, 0.6], [0.2, 0.7], 1, 40), 'bandpass', output='sos')),
+    ("rt=BS method=cheby2 fo=min f_pb=0.1 f_sb=0.15 f_sb2=0.3 f_pb2=0.35 A_PB=1 A_SB=40",
+     lambda: sig.cheby2(sig.cheb2ord([0.2, 0.7], [0.3, 0.6], 1, 40)[0], 40, sig.cheb2ord([0.2, 0.7], [0.3, 0.6], 1, 40)[1], 'bandstop', output='sos')),
+    ("rt=BS method=ellip fo=min f_s=1000 f_pb=100 f_sb=150 f_sb2=300 f_pb2=350 A_PB=1 A_SB=60",
+     lambda: sig.ellip(sig.ellipord([0.2, 0.7], [0.3, 0.6], 1, 60)[0], 1, 60, sig.ellipord([0.2, 0.7], [0.3, 0.6], 1, 60)[1], 'bandstop', output='sos')),
+    ("rt=LP method=bessel fo=man N=5 f_c=0.1",
+     lambda: sig.bessel(5, 0.2, output='sos')),
+    ("rt=BP method=ellip fo=man N=8 f_c=0.1 f_c2=0.2 A_PB=1 A_SB=50",
+     lambda: sig.ellip(4, 1, 50, [0.2, 0.4], 'bandpass', output='sos')),
+]
+for spec, ref in cases:
+    r = call("design " + spec)
+    if 'error' in r:
+        check("design " + spec, False, r['error'])
+        continue
+    sos_ref = ref()
+    close("design " + spec, r['sos'], sos_ref, 1e-8)
+
+# FIR designs
+fir_cases = [
+    ("rt=LP method=equiripple fo=min f_pb=0.1 f_sb=0.15 A_PB=1 A_SB=60", 'LP'),
+    ("rt=BP method=equiripple fo=min f_sb=0.1 f_pb=0.15 f_pb2=0.3 f_sb2=0.35 A_PB=1 A_SB=50", 'BP'),
+    ("rt=HP method=equiripple fo=man N=40 f_sb=0.2 f_pb=0.25 W_PB=1 W_SB=1", 'HPman'),
+    ("rt=LP method=firwin fo=min window=kaiser f_pb=0.1 f_sb=0.15 A_SB=60", 'kaiser'),
+    ("rt=HP method=firwin fo=man window=hamming N=30 f_c=0.2", 'hamming'),
+]
+for spec, kind in fir_cases:
+    r = call("design " + spec)
+    if 'error' in r:
+        check("design " + spec, False, r['error'])
+        continue
+    ntaps = r['N'] + 1
+    a_pb = (10**(1/20) - 1) / (10**(1/20) + 1)
+    if kind == 'LP':
+        n, bands, w = remezord_py([0.1, 0.15], [1, 0], [a_pb, 10**-3], 'ichige')
+        ref = sig.remez(n, bands, [1, 0], weight=w, fs=1)
+    elif kind == 'BP':
+        n, bands, w = remezord_py([0.1, 0.15, 0.3, 0.35], [0, 1, 0], [10**-2.5, a_pb, 10**-2.5], 'ichige')
+        ref = sig.remez(n, bands, [0, 1, 0], weight=w, fs=1)
+    elif kind == 'HPman':
+        ref = sig.remez(41, [0, 0.2, 0.25, 0.5], [0, 1], fs=1)
+    elif kind == 'kaiser':
+        n, beta = sig.kaiserord(60, 0.1)
+        ref = sig.firwin(n, 0.125, window=('kaiser', beta), fs=1)
+    else:
+        ref = sig.firwin(31, 0.2, window='hamming', pass_zero=False, fs=1)
+    close("design " + spec, r['b'], ref, 1e-9)
+
+# ---------------------------------------------------------------------------
+# data import: compare with read_text_table() of pyfda/plot_widgets/plot_data_filt.py
+# (extracted from the Python source when PYFDA_DATA_FILT points to it, else built-in copy)
+def load_py_reader():
+    import ast
+    import csv
+    import logging
+    src_file = os.environ.get("PYFDA_DATA_FILT", "")
+    if not os.path.isfile(src_file):
+        return None
+    src = open(src_file, encoding='utf-8').read()
+    tree = ast.parse(src)
+    keep = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.Assign))
+            and (not isinstance(n, ast.FunctionDef) or n.name in ('_str2num', '_is_num', 'read_text_table'))]
+    logging.getLogger('x').setLevel(logging.ERROR)
+    ns = {'np': np, 'csv': csv, 'logging': logging, '__name__': 'x', 'os': os}
+    exec(compile(ast.Module(body=keep, type_ignores=[]), src_file, 'exec'), ns)
+    return ns['read_text_table']
+
+
+read_text_table_py = load_py_reader()
+
+
+def _isnum(c):
+    c = str(c).strip()
+    if ',' in c and '.' not in c:
+        c = c.replace(',', '.')
+    try:
+        float(c)
+        return True
+    except ValueError:
+        return False
+if read_text_table_py is None:
+    print("PYFDA_DATA_FILT not set, skipping comparison with the Python CSV reader")
+csv_cases = [
+    "time,ch1\ns,V\n0,1.5\n0.001,2.5\n0.002,-1\n",
+    "# comment\n% another\nt;x\n0;1,5\n1;2,5\n2;3\n",
+    "Meas 1\n1\n2\n3\n",
+    "value\n0,5\n1,5\n2,5\n",
+    "a\tb\tc\n1\t2\t3\n4\t5\t6\n",
+    "Device: X\nDate: today\nt,y\n0,1\n1,2\n2,3\n3,4\n",
+    "Device: X\nt,y\n" + "".join(f"{i},{i*i}\n" for i in range(20)),
+    "1 2\n3 4\n5 6\n",
+    "x,y,\n1,2,\n3,4,\n",
+    "t;u\n0;1\n1;;\n2;x\n3;4\n",
+    '"a b","c"\n"1","2"\n3,4\n',
+    "// header\nA|B\n1|2\n3|4\n",
+]
+with tempfile.TemporaryDirectory() as tmp:
+    for i, text in enumerate(csv_cases):
+        fn = os.path.join(tmp, f"t{i}.csv")
+        with open(fn, 'w', encoding='utf-8') as f:
+            f.write(text)
+        r = call(f"csv {fn}")
+        if read_text_table_py is None:
+            check(f"csv case {i}", 'error' not in r, str(r))
+            continue
+        data, names = read_text_table_py(fn)
+        ok = 'error' not in r and r['rows'] == data.shape[0] and r['cols'] == data.shape[1]\
+            and r['names'] == names
+        if ok:
+            got = np.array(r['values'], dtype=float).reshape(data.shape)
+            conv = np.array([[float(str(c).replace(',', '.')) if _isnum(c) else np.nan for c in row]
+                             for row in data])
+            ok = np.allclose(got, conv, equal_nan=True)
+        check(f"csv case {i}", ok, f"C++ {r} / Python {names} {data.tolist()}")
+    # Excel style: cp1252 encoded header with BOM-less umlaut, CRLF
+    fn = os.path.join(tmp, "cp1252.csv")
+    with open(fn, 'wb') as f:
+        f.write("Zeit;Spannung Ä\r\n0;1,0\r\n1;2,0\r\n".encode('cp1252'))
+    r = call(f"csv {fn}")
+    check("csv cp1252", r.get('names') == ["Zeit", "Spannung Ä"], f"{r}")
+    # wav
+    import scipy.io.wavfile as wavfile
+    fn = os.path.join(tmp, "t.wav")
+    data = (np.sin(np.arange(100) * 0.1) * 20000).astype(np.int16)
+    wavfile.write(fn, 8000, np.column_stack((data, -data)))
+    r = call(f"csv {fn}")
+    check("wav", r.get('rows') == 100 and r.get('cols') == 2 and r.get('fs') == 8000
+          and np.allclose(np.array(r['values'])[::2], data / 32768), f"{str(r)[:200]}")
+    fn = os.path.join(tmp, "t.npy")
+    np.save(fn, np.arange(12.).reshape(4, 3))
+    r = call(f"csv {fn}")
+    check("npy", r.get('rows') == 4 and r.get('cols') == 3 and r['values'] == list(np.arange(12.)), f"{r}")
+
+proc.stdin.close()
+proc.wait()
+print(f"{n_pass} checks passed, {n_fail} failed")
+sys.exit(1 if n_fail else 0)

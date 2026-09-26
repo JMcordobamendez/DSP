@@ -1,0 +1,93 @@
+# Build the C++ / Qt port of pyfda (pyfda_cpp/), compare its numerical core with
+# scipy and create a Windows executable (artifact "pyfda_cpp_win").
+name: build_pyfda_cpp
+
+on:
+  push:
+    paths:
+      - 'pyfda_cpp/**'
+      - '.github/workflows/build_pyfda_cpp.yml'
+  pull_request:
+    paths:
+      - 'pyfda_cpp/**'
+      - '.github/workflows/build_pyfda_cpp.yml'
+  workflow_dispatch:
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install scipy
+        run: pip install numpy scipy
+
+      - name: Build numerical core and CLI
+        run: |
+          cmake -S pyfda_cpp -B build -DPYFDA_BUILD_GUI=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j 4
+
+      - name: Compare with scipy
+        run: python pyfda_cpp/tests/verify_scipy.py build/pyfda_cli
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          arch: 'win64_msvc2019_64'
+          cache: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install scipy
+        run: pip install numpy scipy
+
+      - name: Build
+        run: |
+          cmake -S pyfda_cpp -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Compare with scipy (MSVC build)
+        run: python pyfda_cpp/tests/verify_scipy.py build/pyfda_cli.exe
+
+      - name: Deploy Qt libraries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/pyfda_cpp | Out-Null
+          Copy-Item build/pyfda_cpp.exe dist/pyfda_cpp/
+          Copy-Item pyfda_cpp/examples/measurement.csv dist/pyfda_cpp/
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw dist/pyfda_cpp/pyfda_cpp.exe
+
+      - name: Smoke test of the executable
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_PLUGIN_PATH: ${{ env.QT_ROOT_DIR }}/plugins
+        run: |
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--data', 'pyfda_cpp/examples/measurement.csv', '--filter', '--export', 'smoke.csv' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "pyfda_cpp.exe failed with exit code $($p.ExitCode)" }
+          if (-not (Test-Path smoke.csv)) { throw "smoke.csv was not written" }
+          Get-Content smoke.csv -TotalCount 3
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyfda_cpp_win
+          path: dist/pyfda_cpp
+          if-no-files-found: error
