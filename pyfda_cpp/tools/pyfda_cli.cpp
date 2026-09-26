@@ -429,6 +429,24 @@ std::string run(const std::string &line) {
         const FxSpec s = parse_fx(in);
         return "{\"text\":" + str(t == "fir" ? export_vhdl_fir(list(c), s) : export_vhdl_sos(to_sos(list(c)), s)) + "}";
     }
+    if (cmd == "verilog") {
+        std::string t, c;
+        in >> t >> c;
+        const FxSpec s = parse_fx(in);
+        return "{\"text\":" + str(t == "fir" ? export_verilog_fir(list(c), s) : export_verilog_sos(to_sos(list(c)), s)) + "}";
+    }
+    if (cmd == "tb") {  // tb vhdl|verilog fir|sos <coeffs> <x or -> <fx spec>
+        std::string lang, t, c, xs;
+        in >> lang >> t >> c >> xs;
+        const FxSpec s = parse_fx(in);
+        const bool fir = t == "fir";
+        const Vec b = fir ? list(c) : Vec();
+        const Sos sos = fir ? Sos() : to_sos(list(c));
+        const Vec x = xs == "-" ? hdl_test_stimulus(s, fir ? b.size() : 3 * sos.size()) : list(xs);
+        const std::string name = fir ? "fir_filter" : "iir_filter";
+        return "{\"text\":" + str(lang == "vhdl" ? export_vhdl_testbench(b, sos, s, x, name)
+                                                  : export_verilog_testbench(b, sos, s, x, name)) + "}";
+    }
     if (cmd == "fxauto") {
         std::string t, c;
         in >> t >> c;

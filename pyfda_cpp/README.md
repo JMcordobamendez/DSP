@@ -14,7 +14,7 @@ respuesta a distintos estímulos y filtrar datos medidos.
 | `src/gui/` | Interfaz Qt 6 Widgets, gráficas propias con `QPainter` (sin matplotlib ni Qt Charts) |
 | `tools/pyfda_cli.cpp` | CLI que expone el núcleo para compararlo con scipy |
 | `tests/verify_scipy.py` | ~1700 comprobaciones contra scipy/pyfda y contra el lector CSV en Python de pyfda |
-| `tests/verify_vhdl.py` | Simula con GHDL el VHDL generado y lo compara bit a bit con el modelo en coma fija |
+| `tests/verify_vhdl.py` | Simula con GHDL e Icarus Verilog el VHDL/Verilog generado y los testbenches, y los compara bit a bit con el modelo en coma fija |
 | `examples/measurement.csv` | CSV de ejemplo (1 kHz, 10 Hz + 300 Hz + ruido) |
 | `examples/lowpass_50Hz.json` | Filtro de ejemplo (elíptico, paso bajo 50 Hz a f_S = 1 kHz) |
 
@@ -105,6 +105,18 @@ pyfda usa `N` como número de coeficientes en el método de ventana.
 * Los filtros manuales se guardan en el JSON con sus coeficientes o, si se introdujeron
   como polos/ceros, con `"zpk"` para no perder precisión.
 
+## Fase 5: Verilog y testbenches
+
+* **Verilog-2001** del filtro FIR o IIR con los mismos puertos y la misma latencia que el
+  VHDL (en pyfda solo existe la exportación Verilog de FIR con amaranth). Se comprueba
+  con Icarus Verilog bit a bit frente al modelo, también con desbordamientos.
+* **Testbenches autoverificables** en VHDL y Verilog (*Export HDL ... → with testbench*):
+  impulso, escalones y ruido pseudoaleatorio, salida esperada calculada con el modelo en
+  coma fija; imprimen `PASSED` o los errores muestra a muestra.
+* El entero de cada coeficiente (formato `qint` de pyfda) ya aparece en la tabla de la
+  pestaña Fixpoint junto a hex/bin/oct/CSD. pyfda solo tiene las estructuras FIR en
+  forma directa e IIR DF1, las dos portadas.
+
 ## Verificación
 
 ```
@@ -134,7 +146,7 @@ pasa los tests contra scipy y sube `pyfda_cpp.exe` con las DLL de Qt como artefa
 
 Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 `--save-filter f.json`, `--stim sine`, `--tran-export t.csv`, `--fixpoint`,
-`--export-hdl filtro.vhd|.coe`, `--data fichero`,
+`--export-hdl filtro.vhd|.v|.coe`, `--hdl-testbench`, `--data fichero`,
 `--filter`, `--export salida.csv`, `--manual-ba "1,2,1/1,-0.5"`,
 `--manual-zpk "0.5:0.5,0.5:-0.5/0.9/2"`, `--screenshot carpeta`.
 
@@ -142,8 +154,6 @@ Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 
 * En el análisis transitorio: estímulos complejos (exp), fórmula libre, espectrograma,
   datos de fichero como estímulo y condiciones iniciales. Gráfica 3D.
-* Coma fija: formato de visualización entero (`qint`), otras estructuras (FIR transpuesta,
-  IIR DF2), exportación Verilog y testbench VHDL.
 * Edición de polos/ceros arrastrándolos en la gráfica P/Z.
 * Visor de ventanas FFT y el resto de ventanas de pyfda, más unidades (f_Ny, k),
   especificaciones de amplitud en V/W, pestaña de información, fichero de configuración

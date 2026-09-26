@@ -23,7 +23,9 @@ public:
     bool simulate() const;
     void setSpec(const pyfda::FxSpec &s, bool simulate);
     /// Export as COE (FIR) or VHDL, the format is taken from the suffix (.coe / .vhd)
-    bool exportFile(const QString &file_name);
+    /// Export by suffix: .coe, .vhd / .vhdl or .v; with_tb also writes a
+    /// self-checking testbench <name>_tb.vhd / <name>_tb.v
+    bool exportFile(const QString &file_name, bool with_tb = false);
 
 signals:
     /// Fixpoint settings or the "simulate" switch changed

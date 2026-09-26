@@ -9,7 +9,8 @@
 //   --stim <name>          stimulus of the transient analysis (dirac, step, sine, ...)
 //   --tran-export <file>   export stimulus and response of the transient analysis
 //   --fixpoint             fixpoint simulation in the transient analysis
-//   --export-hdl <file>    export the fixpoint filter (.vhd or .coe)
+//   --export-hdl <file>    export the fixpoint filter (.vhd, .v or .coe)
+//   --hdl-testbench        with --export-hdl: also write a self-checking testbench <name>_tb.vhd / .v
 //   --manual-ba <b/a>      enter coefficients in the Coeffs tab editor, e.g. "1,2,1/1,-0.5", and apply
 //   --manual-zpk <z/p/k>   enter poles / zeros, e.g. "0.5:0.5,0.5:-0.5/0.9/2" (re:im pairs), and apply
 //   --screenshot <dir>     save a screenshot of every tab and quit
@@ -44,12 +45,14 @@ int main(int argc, char *argv[]) {
     QCommandLineOption optStim("stim", "Stimulus of the transient analysis.", "name");
     QCommandLineOption optTranExp("tran-export", "Export the transient stimulus and response as CSV.", "file");
     QCommandLineOption optFix("fixpoint", "Fixpoint simulation in the transient analysis.");
-    QCommandLineOption optHdl("export-hdl", "Export the fixpoint filter as VHDL (.vhd) or COE (.coe) and quit.", "file");
+    QCommandLineOption optHdl("export-hdl", "Export the fixpoint filter as VHDL (.vhd), Verilog (.v) or COE (.coe) and quit.",
+                              "file");
+    QCommandLineOption optTb("hdl-testbench", "With --export-hdl: also write a self-checking testbench.");
     QCommandLineOption optManBa("manual-ba", "Enter b / a in the coefficient editor and apply, e.g. 1,2,1/1,-0.5.", "b/a");
     QCommandLineOption optManZpk("manual-zpk", "Enter zeros / poles / gain in the P/Z editor and apply, "
                                                "e.g. 0.5:0.5,0.5:-0.5/0.9/2.", "z/p/k");
     parser.addOptions({optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp, optFix,
-                       optHdl, optManBa, optManZpk});
+                       optHdl, optTb, optManBa, optManZpk});
     parser.process(app);
 
     MainWindow w;
@@ -86,7 +89,7 @@ int main(int argc, char *argv[]) {
     if (parser.isSet(optManZpk) && !manual(parser.value(optManZpk), true)) rc = 1;
     if (parser.isSet(optFix)) w.fixpoint()->setSpec(w.fixpoint()->spec(), true);
     if (parser.isSet(optSaveFilt) && !w.saveFilter(parser.value(optSaveFilt))) rc = 1;
-    if (parser.isSet(optHdl) && !w.fixpoint()->exportFile(parser.value(optHdl))) rc = 1;
+    if (parser.isSet(optHdl) && !w.fixpoint()->exportFile(parser.value(optHdl), parser.isSet(optTb))) rc = 1;
     if (parser.isSet(optStim)) {
         pyfda::StimParams p = w.tran()->params();
         bool found = false;

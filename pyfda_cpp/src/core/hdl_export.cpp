@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <limits>
+#include <map>
 #include <sstream>
+#include <tuple>
 
 namespace pyfda {
 
@@ -252,6 +255,336 @@ std::string export_vhdl_sos(const Sos &sos, const FxSpec &s, const std::string &
       << "                    y2(k) <= y1(k);\n                    y1(k) <= ys;\n"
       << "                    xs := ys;  -- input of the next section\n                end loop;\n"
       << "                y <= yo;\n            end if;\n        end if;\n    end process;\nend architecture;\n";
+    return o.str();
+}
+
+// ---------------------------------------------------------------------------
+// Verilog
+// ---------------------------------------------------------------------------
+namespace {
+
+std::string vlit(long long v, int w) {
+    // sized signed literal, e.g. -16'sd123; the most negative value can't be written
+    // as -16'sd32768 (the negation overflows after sign extension)
+    if (w <= 64 && v < 0 && (w == 64 ? v == std::numeric_limits<long long>::min() : v == -(1LL << (w - 1))))
+        return "$signed({1'b1, {" + std::to_string(w - 1) + "{1'b0}}})";
+    const unsigned long long m = v < 0 ? 0ULL - static_cast<unsigned long long>(v) : static_cast<unsigned long long>(v);
+    return (v < 0 ? "-" : "") + std::to_string(w) + "'sd" + std::to_string(m);
+}
+
+std::string vpow2(int e, int w, long long add = 0) {
+    // (2^e + add) as sized signed literal with w bits, e <= 63
+    const unsigned long long p = (e >= 64 ? 0ULL : (1ULL << e));
+    const unsigned long long v = add >= 0 ? p + static_cast<unsigned long long>(add) : p - static_cast<unsigned long long>(-add);
+    return std::to_string(w) + "'sd" + std::to_string(v);
+}
+
+// Requantization functions with fixed widths, generated on demand (same arithmetic
+// as the VHDL function requant)
+class VRequant {
+public:
+    std::string call(const std::string &arg, int w_in, int wf_in, int wf_out, int w_out, Quant q, bool sat) {
+        const auto key = std::make_tuple(w_in, wf_in, wf_out, w_out, quant_code(q), sat);
+        auto it = m_names.find(key);
+        if (it == m_names.end()) {
+            const std::string name = "rq" + std::to_string(m_names.size());
+            it = m_names.emplace(key, name).first;
+            m_code += define(name, w_in, wf_in, wf_out, w_out, quant_code(q), sat);
+        }
+        return it->second + "(" + arg + ")";
+    }
+    const std::string &code() const { return m_code; }
+
+private:
+    static std::string define(const std::string &name, int w_in, int wf_in, int wf_out, int w_out, int q, bool sat) {
+        const int s = wf_in - wf_out;
+        const int wt = std::max(w_in, s + 1) + 2;
+        const int we = std::max(wt, w_in + std::max(-s, 0) + 1);
+        if (s > 62) throw DesignError("Too many fractional bits to discard for Verilog export.");
+        std::ostringstream o;
+        o << "    // requantize " << w_in << " bit (" << wf_in << " frac.) -> " << w_out << " bit (" << wf_out
+          << " frac.), " << (q == 0 ? "floor" : q == 1 ? "round" : q == 2 ? "fix" : "ceil") << ", "
+          << (sat ? "sat" : "wrap") << "\n";
+        o << "    function signed [" << w_out - 1 << ":0] " << name << ";\n";
+        o << "        input signed [" << w_in - 1 << ":0] v;\n";
+        o << "        reg signed [" << wt - 1 << ":0] t;\n        reg signed [" << we - 1 << ":0] e;\n";
+        o << "        begin\n";
+        if (s > 0) {
+            o << "            t = v;\n";
+            if (q == 1) {
+                const std::string keep = s < w_in ? "v[" + std::to_string(s) + "]" : "v[" + std::to_string(w_in - 1) + "]";
+                o << "            t = t + " << vpow2(s - 1, wt, -1) << " + {{" << wt - 1 << "{1'b0}}, " << keep << "};\n";
+            } else if (q == 3) {
+                o << "            t = t + " << vpow2(s, wt, -1) << ";\n";
+            } else if (q == 2) {
+                o << "            if (v[" << w_in - 1 << "]) t = t + " << vpow2(s, wt, -1) << ";\n";
+            }
+            o << "            e = t >>> " << s << ";\n";
+        } else {
+            o << "            e = v;\n";
+            if (s < 0) o << "            e = e <<< " << -s << ";\n";
+        }
+        if (we > w_out && sat) {
+            o << "            if (e > " << vpow2(w_out - 1, we, -1) << ") e = " << vpow2(w_out - 1, we, -1) << ";\n";
+            o << "            else if (e < -" << vpow2(w_out - 1, we) << ") e = -" << vpow2(w_out - 1, we) << ";\n";
+        }
+        o << "            " << name << " = e;  // keeps the LSBs (wrap around) or sign extends\n";
+        o << "        end\n    endfunction\n\n";
+        return o.str();
+    }
+    std::map<std::tuple<int, int, int, int, int, bool>, std::string> m_names;
+    std::string m_code;
+};
+
+std::string vheader(const std::string &what, const FxSpec &s, bool iir) {
+    std::string h = header(what, s, iir);
+    // VHDL comments -> Verilog comments, drop the library clauses
+    std::string out;
+    std::istringstream in(h);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.rfind("library", 0) == 0 || line.rfind("use ", 0) == 0) continue;
+        if (line.rfind("--", 0) == 0) line = "//" + line.substr(2);
+        out += line + "\n";
+    }
+    while (out.size() > 1 && out[out.size() - 1] == '\n' && out[out.size() - 2] == '\n') out.pop_back();
+    return out + "\n";
+}
+
+std::string vports(const std::string &name, const FxSpec &s) {
+    std::ostringstream o;
+    o << "module " << name << " (\n    input  wire clk,\n    input  wire rst,\n    input  wire en,\n"
+      << "    input  wire signed [" << s.qi.W() - 1 << ":0] x,\n"
+      << "    output reg  signed [" << s.qo.W() - 1 << ":0] y\n);\n\n";
+    return o.str();
+}
+
+}  // namespace
+
+std::string export_verilog_fir(const Vec &b, const FxSpec &s, const std::string &name_in) {
+    for (auto [q, n] : {std::pair{&s.qi, "the input"}, {&s.qcb, "the coefficients"}, {&s.qacc, "the accumulator"},
+                        {&s.qo, "the output"}})
+        check_width(*q, n);
+    quant_code(s.qacc.quant);
+    quant_code(s.qo.quant);
+    if (b.empty()) throw DesignError("No coefficients.");
+    const std::string name = vhdl_identifier(name_in);
+    const Vec bq = quant_coeffs(b, s.qcb);
+    const size_t L = bq.size();
+    const int w_prod = s.qi.W() + s.qcb.W();
+    const int w_sum = s.qacc.W() + clog2(L) + 1;
+    VRequant rq;
+    std::ostringstream body;
+    body << "    always @(posedge clk) begin\n        if (rst) begin\n";
+    for (size_t i = 1; i < L; ++i) body << "            t" << i << " <= 0;\n";
+    body << "            y <= 0;\n        end else if (en) begin\n            acc = 0;\n";
+    for (size_t i = 0; i < L; ++i) {
+        body << "            p = " << (i == 0 ? std::string("x") : "t" + std::to_string(i)) << " * "
+             << vlit(to_int(bq[i], s.qcb), s.qcb.W()) << ";\n";
+        body << "            acc = acc + "
+             << rq.call("p", w_prod, s.qi.WF + s.qcb.WF, s.qacc.WF, s.qacc.W(), s.qacc.quant, s.qacc.ovfl == Ovfl::Sat)
+             << ";\n";
+    }
+    const std::string acc_q =
+        rq.call("acc", w_sum, s.qacc.WF, s.qacc.WF, s.qacc.W(), Quant::Floor, s.qacc.ovfl == Ovfl::Sat);
+    body << "            accq = " << acc_q << ";\n";
+    body << "            y <= " << rq.call("accq", s.qacc.W(), s.qacc.WF, s.qo.WF, s.qo.W(), s.qo.quant, s.qo.ovfl == Ovfl::Sat)
+         << ";\n";
+    for (size_t i = L - 1; i >= 1; --i)
+        body << "            t" << i << " <= " << (i == 1 ? std::string("x") : "t" + std::to_string(i - 1)) << ";\n";
+    body << "        end\n    end\n\nendmodule\n";
+
+    std::ostringstream o;
+    o << vheader("FIR filter in direct form, " + std::to_string(L) + " taps", s, false) << vports(name, s);
+    o << "    // delay line x[n-1] ... x[n-" << L - 1 << "]\n";
+    for (size_t i = 1; i < L; ++i) o << "    reg signed [" << s.qi.W() - 1 << ":0] t" << i << " = 0;\n";
+    o << "    reg signed [" << w_prod - 1 << ":0] p;\n    reg signed [" << w_sum - 1 << ":0] acc;\n"
+      << "    reg signed [" << s.qacc.W() - 1 << ":0] accq;\n\n";
+    o << rq.code() << body.str();
+    return o.str();
+}
+
+std::string export_verilog_sos(const Sos &sos, const FxSpec &s, const std::string &name_in) {
+    for (auto [q, n] : {std::pair{&s.qi, "the input"}, {&s.qcb, "the b coefficients"}, {&s.qca, "the a coefficients"},
+                        {&s.qacc, "the accumulator"}, {&s.qo, "the output"}})
+        check_width(*q, n);
+    quant_code(s.qacc.quant);
+    quant_code(s.qo.quant);
+    if (sos.empty()) throw DesignError("No second-order sections.");
+    const std::string name = vhdl_identifier(name_in);
+    const int wf_s = std::max(s.qi.WF, s.qo.WF);
+    const int wi_s = std::max(s.qi.WI, s.qo.WI);
+    const int w_s = wi_s + wf_s + 1;
+    const int w_sum = s.qacc.W() + 4;
+    const int w_pb = w_s + s.qcb.W(), w_pa = w_s + s.qca.W();
+    const bool sat_acc = s.qacc.ovfl == Ovfl::Sat;
+    VRequant rq;
+    std::ostringstream body;
+    const size_t n = sos.size();
+    body << "    always @(posedge clk) begin\n        if (rst) begin\n";
+    for (size_t k = 0; k < n; ++k)
+        body << "            x1_" << k << " <= 0; x2_" << k << " <= 0; y1_" << k << " <= 0; y2_" << k << " <= 0;\n";
+    body << "            y <= 0;\n        end else if (en) begin\n";
+    body << "            xs = x;\n";
+    if (wf_s - s.qi.WF > 0) body << "            xs = xs <<< " << wf_s - s.qi.WF << ";\n";
+    for (size_t k = 0; k < n; ++k) {
+        const auto &sec = sos[k];
+        if (sec[3] != 1.0) throw DesignError("Second-order sections must be normalized to a0 = 1.");
+        const Vec bq = quant_coeffs({sec[0], sec[1], sec[2]}, s.qcb), aq = quant_coeffs({sec[4], sec[5]}, s.qca);
+        const std::string K = std::to_string(k);
+        auto pb = [&](const std::string &v, double c) {
+            body << "            pb = " << v << " * " << vlit(to_int(c, s.qcb), s.qcb.W()) << ";\n";
+            return rq.call("pb", w_pb, wf_s + s.qcb.WF, s.qacc.WF, s.qacc.W(), s.qacc.quant, sat_acc);
+        };
+        auto pa = [&](const std::string &v, double c) {
+            body << "            pa = " << v << " * " << vlit(to_int(c, s.qca), s.qca.W()) << ";\n";
+            return rq.call("pa", w_pa, wf_s + s.qca.WF, s.qacc.WF, s.qacc.W(), s.qacc.quant, sat_acc);
+        };
+        body << "            // section " << k << "\n";
+        // pb / pa write the product into the body and return the requantization call
+        std::string r = pb("xs", bq[0]);
+        body << "            acc_b = " << r << ";\n";
+        r = pb("x1_" + K, bq[1]);
+        body << "            acc_b = acc_b + " << r << ";\n";
+        r = pb("x2_" + K, bq[2]);
+        body << "            acc_b = acc_b + " << r << ";\n";
+        r = pa("y1_" + K, aq[0]);
+        body << "            acc_a = " << r << ";\n";
+        r = pa("y2_" + K, aq[1]);
+        body << "            acc_a = acc_a + " << r << ";\n";
+        body << "            acc = acc_b - acc_a;\n";
+        body << "            accq = " << rq.call("acc", w_sum, s.qacc.WF, s.qacc.WF, s.qacc.W(), Quant::Floor, sat_acc) << ";\n";
+        body << "            yo = " << rq.call("accq", s.qacc.W(), s.qacc.WF, s.qo.WF, s.qo.W(), s.qo.quant, s.qo.ovfl == Ovfl::Sat)
+             << ";\n";
+        body << "            ys = yo;\n";
+        if (wf_s - s.qo.WF > 0) body << "            ys = ys <<< " << wf_s - s.qo.WF << ";\n";
+        body << "            x2_" << K << " <= x1_" << K << "; x1_" << K << " <= xs; y2_" << K << " <= y1_" << K << "; y1_"
+             << K << " <= ys;\n";
+        body << "            xs = ys;\n";
+    }
+    body << "            y <= yo;\n        end\n    end\n\nendmodule\n";
+
+    std::ostringstream o;
+    o << vheader("IIR filter, cascade of " + std::to_string(n) + " second-order sections in direct form 1", s, true)
+      << vports(name, s);
+    o << "    // section inputs and outputs with " << wf_s << " fractional bits\n";
+    for (size_t k = 0; k < n; ++k)
+        o << "    reg signed [" << w_s - 1 << ":0] x1_" << k << " = 0, x2_" << k << " = 0, y1_" << k << " = 0, y2_" << k
+          << " = 0;\n";
+    o << "    reg signed [" << w_s - 1 << ":0] xs, ys;\n    reg signed [" << s.qo.W() - 1 << ":0] yo;\n"
+      << "    reg signed [" << w_pb - 1 << ":0] pb;\n    reg signed [" << w_pa - 1 << ":0] pa;\n"
+      << "    reg signed [" << w_sum - 1 << ":0] acc_b, acc_a, acc;\n"
+      << "    reg signed [" << s.qacc.W() - 1 << ":0] accq;\n\n";
+    o << rq.code() << body.str();
+    return o.str();
+}
+
+// ---------------------------------------------------------------------------
+// testbenches
+// ---------------------------------------------------------------------------
+Vec hdl_test_stimulus(const FxSpec &s, size_t n_taps) {
+    const double full = std::ldexp(1.0, s.qi.WI);  // input range -full ... full - LSB
+    const size_t L = std::max<size_t>(n_taps, 8);
+    Vec x;
+    x.push_back(0.5 * full);                        // impulse
+    x.insert(x.end(), L + 4, 0.0);
+    x.insert(x.end(), 2 * L + 8, 0.5 * full);       // step up
+    x.insert(x.end(), 2 * L + 8, -0.5 * full);      // step down
+    unsigned long long st = 12345;                  // deterministic pseudo random noise (LCG)
+    for (int i = 0; i < 256; ++i) {
+        st = st * 6364136223846793005ULL + 1442695040888963407ULL;
+        const double u = double(st >> 11) / double(1ULL << 53);
+        x.push_back((2 * u - 1) * 0.9 * full);
+    }
+    x.insert(x.end(), L + 4, 0.0);
+    return x;
+}
+
+namespace {
+struct Vectors {
+    std::vector<long long> x, y;
+};
+
+Vectors tb_vectors(const Vec &b, const Sos &sos, const FxSpec &s, const Vec &x) {
+    const FxResult r = sos.empty() ? fx_filter_fir(b, s, x) : fx_filter_sos(sos, s, x);
+    Vectors v;
+    for (double xv : r.x_q) v.x.push_back(to_int(xv, s.qi));
+    for (double yv : r.y) v.y.push_back(to_int(yv, s.qo));
+    return v;
+}
+
+std::string int_list(const std::vector<long long> &v, int per_line, const std::string &indent) {
+    std::ostringstream o;
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (i % size_t(per_line) == 0) o << (i ? ",\n" : "") << indent;
+        else o << ", ";
+        o << v[i];
+    }
+    return o.str();
+}
+}  // namespace
+
+std::string export_vhdl_testbench(const Vec &b, const Sos &sos, const FxSpec &s, const Vec &x, const std::string &name_in) {
+    if (s.qi.W() > 32 || s.qo.W() > 32)
+        throw DesignError("The VHDL testbench needs input and output word lengths <= 32 bits.");
+    const std::string name = vhdl_identifier(name_in);
+    const Vectors v = tb_vectors(b, sos, s, x);
+    std::ostringstream o;
+    o << "-- Self-checking testbench for " << name << ", generated by pyfda_cpp\n"
+      << "-- The expected output is calculated with the fixpoint model of pyfda_cpp.\n"
+      << "-- ghdl -a --std=08 " << name << ".vhd " << name << "_tb.vhd && ghdl -e --std=08 " << name
+      << "_tb && ghdl -r --std=08 " << name << "_tb\n\n";
+    o << "library ieee;\nuse ieee.std_logic_1164.all;\nuse ieee.numeric_std.all;\n\n";
+    o << "entity " << name << "_tb is\nend entity;\n\narchitecture sim of " << name << "_tb is\n";
+    o << "    type int_array is array (natural range <>) of integer;\n";
+    o << "    constant X_IN : int_array := (\n" << int_list(v.x, 16, "        ") << ");\n";
+    o << "    constant Y_REF : int_array := (\n" << int_list(v.y, 16, "        ") << ");\n";
+    o << "    signal clk, rst, en : std_logic := '0';\n";
+    o << "    signal x : signed(" << s.qi.W() - 1 << " downto 0) := (others => '0');\n";
+    o << "    signal y : signed(" << s.qo.W() - 1 << " downto 0);\n";
+    o << "begin\n    dut : entity work." << name << " port map (clk => clk, rst => rst, en => en, x => x, y => y);\n\n";
+    o << "    clk <= not clk after 5 ns;\n\n";
+    o << "    process\n        variable errors : integer := 0;\n    begin\n"
+      << "        rst <= '1';\n        wait until rising_edge(clk);\n        rst <= '0';\n"
+      << "        for i in X_IN'range loop\n"
+      << "            x <= to_signed(X_IN(i), x'length);\n            en <= '1';\n"
+      << "            wait until rising_edge(clk);\n            en <= '0';\n            wait for 1 ns;\n"
+      << "            if to_integer(y) /= Y_REF(i) then\n                errors := errors + 1;\n"
+      << "                report \"sample \" & integer'image(i) & \": y = \" & integer'image(to_integer(y)) &\n"
+      << "                       \", expected \" & integer'image(Y_REF(i)) severity error;\n            end if;\n"
+      << "            wait until rising_edge(clk);  -- one clock without enable\n        end loop;\n"
+      << "        if errors = 0 then\n            report \"PASSED: \" & integer'image(X_IN'length) & \" samples\";\n"
+      << "        else\n            report \"FAILED: \" & integer'image(errors) & \" errors\" severity failure;\n"
+      << "        end if;\n        std.env.finish;\n    end process;\nend architecture;\n";
+    return o.str();
+}
+
+std::string export_verilog_testbench(const Vec &b, const Sos &sos, const FxSpec &s, const Vec &x,
+                                     const std::string &name_in) {
+    const std::string name = vhdl_identifier(name_in);
+    const Vectors v = tb_vectors(b, sos, s, x);
+    const int wi = s.qi.W(), wo = s.qo.W();
+    std::ostringstream o;
+    o << "// Self-checking testbench for " << name << ", generated by pyfda_cpp\n"
+      << "// The expected output is calculated with the fixpoint model of pyfda_cpp.\n"
+      << "// iverilog -o tb " << name << ".v " << name << "_tb.v && vvp tb\n\n";
+    o << "`timescale 1ns / 1ps\n\nmodule " << name << "_tb;\n";
+    o << "    localparam N = " << v.x.size() << ";\n";
+    o << "    reg signed [" << wi - 1 << ":0] X_IN [0:N-1];\n    reg signed [" << wo - 1 << ":0] Y_REF [0:N-1];\n";
+    o << "    reg clk = 0, rst = 1, en = 0;\n    reg signed [" << wi - 1 << ":0] x = 0;\n"
+      << "    wire signed [" << wo - 1 << ":0] y;\n    integer i, errors;\n\n";
+    o << "    " << name << " dut (.clk(clk), .rst(rst), .en(en), .x(x), .y(y));\n\n";
+    o << "    always #5 clk = ~clk;\n\n    initial begin\n";
+    for (size_t i = 0; i < v.x.size(); ++i)
+        o << "        X_IN[" << i << "] = " << vlit(v.x[i], wi) << "; Y_REF[" << i << "] = " << vlit(v.y[i], wo) << ";\n";
+    o << "        errors = 0;\n        @(posedge clk);\n        #1 rst = 0;\n"
+      << "        for (i = 0; i < N; i = i + 1) begin\n"
+      << "            x = X_IN[i];\n            en = 1;\n            @(posedge clk);\n            #1 en = 0;\n"
+      << "            if (y !== Y_REF[i]) begin\n                errors = errors + 1;\n"
+      << "                $display(\"ERROR sample %0d: y = %0d, expected %0d\", i, y, Y_REF[i]);\n            end\n"
+      << "            @(posedge clk);  // one clock without enable\n            #1;\n        end\n"
+      << "        if (errors == 0) $display(\"PASSED: %0d samples\", N);\n"
+      << "        else $display(\"FAILED: %0d errors\", errors);\n        $finish;\n    end\n\nendmodule\n";
     return o.str();
 }
 

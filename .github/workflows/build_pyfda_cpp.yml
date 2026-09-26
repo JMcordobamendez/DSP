@@ -35,10 +35,10 @@ jobs:
       - name: Compare with scipy
         run: python pyfda_cpp/tests/verify_scipy.py build/pyfda_cli
 
-      - name: Simulate the generated VHDL with GHDL
+      - name: Simulate the generated VHDL and Verilog (GHDL, Icarus Verilog)
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q ghdl
+          sudo apt-get install -y -q ghdl iverilog
           python pyfda_cpp/tests/verify_vhdl.py build/pyfda_cli
 
   build-windows:
@@ -107,6 +107,9 @@ jobs:
           if ($m.spec.method -ne 'manual_iir' -or $m.zpk.k -ne 2) { throw "manual P/Z filter not saved correctly" }
           $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/ma_lowpass.json', '--save-filter', 'ma.json' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "moving average design failed with exit code $($p.ExitCode)" }
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/lowpass_50Hz.json', '--export-hdl', 'lowpass.v', '--hdl-testbench' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Verilog export failed with exit code $($p.ExitCode)" }
+          if (-not (Select-String -Path lowpass_tb.v -Pattern 'module lowpass_tb' -Quiet)) { throw "Verilog testbench was not written" }
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

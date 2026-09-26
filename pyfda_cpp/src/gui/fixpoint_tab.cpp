@@ -57,9 +57,9 @@ FixpointView::FixpointView(QWidget *parent) : DesignView(parent) {
     top->addStretch(1);
     m_coe = new QPushButton(tr("Export COE ..."), this);
     m_coe->setToolTip(tr("Quantized coefficients as Xilinx COE file (FIR Compiler), FIR filters only"));
-    m_vhdl = new QPushButton(tr("Export VHDL ..."), this);
-    m_vhdl->setToolTip(tr("<span>Synthesizable VHDL (numeric_std) of the fixpoint filter, bit exact with the "
-                          "fixpoint simulation</span>"));
+    m_vhdl = new QPushButton(tr("Export HDL ..."), this);
+    m_vhdl->setToolTip(tr("<span>Synthesizable VHDL (numeric_std) or Verilog of the fixpoint filter, bit exact "
+                          "with the fixpoint simulation, optionally with a self-checking testbench</span>"));
     top->addWidget(m_coe);
     top->addWidget(m_vhdl);
     lay->addLayout(top);
@@ -149,10 +149,14 @@ FixpointView::FixpointView(QWidget *parent) : DesignView(parent) {
         exportFile(fn);
     });
     connect(m_vhdl, &QPushButton::clicked, this, [this] {
-        QString fn = QFileDialog::getSaveFileName(this, tr("Export VHDL"), QString(), tr("VHDL (*.vhd *.vhdl)"));
+        const QStringList filters = {tr("VHDL (*.vhd *.vhdl)"), tr("VHDL with testbench (*.vhd *.vhdl)"),
+                                     tr("Verilog (*.v)"), tr("Verilog with testbench (*.v)")};
+        QString selected = filters[1];
+        QString fn = QFileDialog::getSaveFileName(this, tr("Export HDL"), QString(), filters.join(";;"), &selected);
         if (fn.isEmpty()) return;
-        if (QFileInfo(fn).suffix().isEmpty()) fn += ".vhd";
-        exportFile(fn);
+        const int idx = std::max<qsizetype>(0, filters.indexOf(selected));
+        if (QFileInfo(fn).suffix().isEmpty()) fn += idx < 2 ? ".vhd" : ".v";
+        exportFile(fn, idx % 2 == 1);
     });
     updateUi();
 }
@@ -327,31 +331,53 @@ void FixpointView::redraw() {
                                 : tr("No coefficient overflows. Signal overflows are shown in the y[n] tab."));
 }
 
-bool FixpointView::exportFile(const QString &file_name) {
+bool FixpointView::exportFile(const QString &file_name, bool with_tb) {
     if (!m_design) {
         Logger::error(tr("No filter designed yet."));
         return false;
     }
-    std::string text;
+    std::string text, tb;
+    const QFileInfo fi(file_name);
+    const QString suffix = fi.suffix().toLower();
+    const QString tb_name = fi.path() + "/" + fi.completeBaseName() + "_tb." + fi.suffix();
     try {
-        const QString suffix = QFileInfo(file_name).suffix().toLower();
-        const std::string name = QFileInfo(file_name).completeBaseName().toStdString();
+        const std::string name = fi.completeBaseName().toStdString();
+        const Vec &b = m_design->ba.b;
+        const Sos no_sos, &sos = m_design->fir ? no_sos : m_design->sos;
+        const bool verilog = suffix == "v";
         if (suffix == "coe") {
             if (!m_design->fir) throw DesignError("COE files are only available for FIR filters.");
-            text = export_coe(m_design->ba.b, m_spec.qcb, 16);
+            if (with_tb) throw DesignError("Testbenches are only available for VHDL and Verilog.");
+            text = export_coe(b, m_spec.qcb, 16);
+        } else if (verilog) {
+            text = m_design->fir ? export_verilog_fir(b, m_spec, name) : export_verilog_sos(sos, m_spec, name);
+        } else if (suffix == "vhd" || suffix == "vhdl") {
+            text = m_design->fir ? export_vhdl_fir(b, m_spec, name) : export_vhdl_sos(sos, m_spec, name);
         } else {
-            text = m_design->fir ? export_vhdl_fir(m_design->ba.b, m_spec, name)
-                                 : export_vhdl_sos(m_design->sos, m_spec, name);
+            throw DesignError("Unknown file type '." + suffix.toStdString() + "', use .coe, .vhd or .v");
+        }
+        if (with_tb) {
+            const Vec x = hdl_test_stimulus(m_spec, m_design->fir ? b.size() : 3 * sos.size());
+            tb = verilog ? export_verilog_testbench(b, sos, m_spec, x, name)
+                         : export_vhdl_testbench(b, sos, m_spec, x, name);
         }
     } catch (const std::exception &e) {
         Logger::error(e.what());
         return false;
     }
-    QFile f(file_name);
-    if (!f.open(QIODevice::WriteOnly) || f.write(text.data(), qint64(text.size())) != qint64(text.size())) {
-        Logger::error(tr("Couldn't write '%1'.").arg(file_name));
-        return false;
-    }
+    auto write = [](const QString &fn, const std::string &t) {
+        QFile f(fn);
+        if (!f.open(QIODevice::WriteOnly) || f.write(t.data(), qint64(t.size())) != qint64(t.size())) {
+            Logger::error(tr("Couldn't write '%1'.").arg(fn));
+            return false;
+        }
+        return true;
+    };
+    if (!write(file_name, text)) return false;
     Logger::info(tr("Exported the fixpoint filter to '%1'.").arg(file_name));
+    if (with_tb) {
+        if (!write(tb_name, tb)) return false;
+        Logger::info(tr("Exported the testbench to '%1'.").arg(tb_name));
+    }
     return true;
 }
