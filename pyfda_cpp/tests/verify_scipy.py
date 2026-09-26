@@ -16,7 +16,8 @@ import numpy as np
 import scipy.signal as sig
 
 CLI = sys.argv[1] if len(sys.argv) > 1 else os.path.join("build", "pyfda_cli")
-proc = subprocess.Popen([CLI], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+# the CLI writes UTF-8 (column names), independent of the console code page
+proc = subprocess.Popen([CLI], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
 n_pass = n_fail = 0
 rng = np.random.default_rng(1)
 
