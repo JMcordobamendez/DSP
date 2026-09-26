@@ -1,5 +1,6 @@
 #include "coeffs_tab.hpp"
 
+#include "filter_io.hpp"
 #include "logger.hpp"
 
 #include <QApplication>
@@ -7,6 +8,7 @@
 #include <QComboBox>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -24,7 +26,8 @@ CoeffsView::CoeffsView(QWidget *parent) : DesignView(parent) {
     m_format->addItems({tr("b, a (transfer function)"), tr("Second-order sections"), tr("Zeros / poles")});
     auto *copy = new QPushButton(tr("Copy"), this);
     copy->setToolTip(tr("Copy the table to the clipboard (tab separated)"));
-    auto *exp = new QPushButton(tr("Export CSV ..."), this);
+    auto *exp = new QPushButton(tr("Export ..."), this);
+    exp->setToolTip(tr("Export the coefficients for MATLAB / Octave, C, Python or as CSV"));
     ctl->addWidget(new QLabel(tr("Format:"), this));
     ctl->addWidget(m_format);
     ctl->addWidget(copy);
@@ -39,7 +42,7 @@ CoeffsView::CoeffsView(QWidget *parent) : DesignView(parent) {
     lay->addWidget(m_table, 1);
     connect(m_format, &QComboBox::currentIndexChanged, this, [this] { redrawNow(); });
     connect(copy, &QPushButton::clicked, this, [this] { QApplication::clipboard()->setText(asText('\t')); });
-    connect(exp, &QPushButton::clicked, this, &CoeffsView::exportCsv);
+    connect(exp, &QPushButton::clicked, this, &CoeffsView::exportDialog);
 }
 
 void CoeffsView::redraw() {
@@ -104,14 +107,39 @@ QString CoeffsView::asText(QChar sep) const {
     return s;
 }
 
-void CoeffsView::exportCsv() {
-    const QString fn = QFileDialog::getSaveFileName(this, tr("Export coefficients"), QString(), tr("CSV (*.csv)"));
+void CoeffsView::exportDialog() {
+    if (!m_design) {
+        Logger::warning(tr("No filter designed yet."));
+        return;
+    }
+    const CoeffFormat formats[] = {CoeffFormat::Matlab, CoeffFormat::CHeader, CoeffFormat::Python, CoeffFormat::Csv};
+    QStringList filters;
+    for (CoeffFormat f : formats) filters << coeff_format_filter(f);
+    const QString table = tr("CSV table of the current view (*.csv)");
+    filters << table;
+    QString selected = filters[0];
+    QString fn = QFileDialog::getSaveFileName(this, tr("Export coefficients"), QString(), filters.join(";;"), &selected);
     if (fn.isEmpty()) return;
+    if (selected == table) {
+        if (QFileInfo(fn).suffix().isEmpty()) fn += ".csv";
+        QFile f(fn);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            Logger::error(tr("Couldn't write '%1'.").arg(fn));
+            return;
+        }
+        redrawNow();
+        QTextStream(&f) << asText(',');
+        Logger::info(tr("Exported the coefficient table to '%1'.").arg(fn));
+        return;
+    }
+    CoeffFormat fmt = formats[std::max<qsizetype>(0, filters.indexOf(selected))];
+    if (QFileInfo(fn).suffix().isEmpty()) fn += QString(".") + coeff_format_suffix(fmt);
+    // write with QFile for Unicode file names on Windows
     QFile f(fn);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    const std::string text = export_coeffs(*m_design, fmt, QFileInfo(fn).completeBaseName().toStdString());
+    if (!f.open(QIODevice::WriteOnly) || f.write(text.data(), qint64(text.size())) != qint64(text.size())) {
         Logger::error(tr("Couldn't write '%1'.").arg(fn));
         return;
     }
-    QTextStream(&f) << asText(',');
     Logger::info(tr("Exported coefficients to '%1'.").arg(fn));
 }

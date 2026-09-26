@@ -18,6 +18,7 @@ add_library(pyfda_core STATIC
     src/core/conversions.cpp
     src/core/data_io.cpp
     src/core/filter_design.cpp
+    src/core/filter_io.cpp
     src/core/filtering.cpp
     src/core/fir_design.cpp
     src/core/iir_design.cpp

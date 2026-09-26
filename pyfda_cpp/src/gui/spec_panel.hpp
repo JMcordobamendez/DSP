@@ -25,6 +25,10 @@ public:
     /// Take over order, corner frequencies etc. calculated by the design
     void updateFromDesign(const pyfda::FilterSpec &s);
     void setStatus(const QString &text, bool error);
+    /// Show the specifications of a loaded filter, unit is "f_S", "Hz", "kHz" or "MHz"
+    void setSpec(const pyfda::FilterSpec &s, const QString &unit);
+    /// Frequency unit as stored in filter files ("f_S", "Hz", "kHz", "MHz")
+    QString unitKey() const;
 
     /// Factor from the frequency unit to Hz, 0 for normalized frequencies
     double unitToHz() const;

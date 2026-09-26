@@ -404,6 +404,73 @@ with tempfile.TemporaryDirectory() as tmp:
     r = call(f"csv {fn}")
     check("npy", r.get('rows') == 4 and r.get('cols') == 3 and r['values'] == list(np.arange(12.)), f"{r}")
 
+# ---------------------------------------------------------------------------
+# filter files (JSON) and coefficient export: everything must read back exactly
+import re
+with tempfile.TemporaryDirectory() as tmp:
+    specs = ["rt=LP method=ellip", "rt=HP method=cheby2 fo=manual N=7 f_c=0.2",
+             "rt=BP method=butter f_pb=0.15 f_pb2=0.3 f_sb=0.1 f_sb2=0.35",
+             "rt=BS method=equiripple f_pb=0.1 f_pb2=0.35 f_sb=0.15 f_sb2=0.3",
+             "rt=LP method=firwin window=hann fo=manual N=30 f_s=1000 f_c=100 f_pb=80 f_sb=150",
+             "rt=HP method=firwin window=kaiser f_pb=0.2 f_sb=0.15"]
+    for i, spec in enumerate(specs):
+        ref = call("design " + spec)
+        j = call("tojson kHz " + spec)
+        doc = json.loads(j['json'])
+        ok = doc['format'] == "pyfda_cpp filter" and doc['spec']['unit'] == "kHz" \
+            and doc['b'] == ref['b'] and doc['a'] == ref['a'] and doc['sos'] == ref['sos']
+        check(f"tojson {spec}", ok, str(doc)[:300])
+        fn = os.path.join(tmp, f"f{i}.json")
+        with open(fn, 'w', encoding='utf-8') as f:
+            f.write(j['json'])
+        r = call(f"fromjson {fn}")
+        ok = 'error' not in r and r['b'] == ref['b'] and r['a'] == ref['a'] and r['sos'] == ref['sos'] \
+            and r['file_b'] == ref['b'] and r['file_sos'] == ref['sos'] and r['unit'] == "kHz"
+        check(f"fromjson {spec}", ok, str(r)[:300])
+
+        # Python export: exec and compare bit exact
+        t = call("export python " + spec)['text']
+        ns = {}
+        exec(t, ns)
+        ok = list(ns['b']) == ref['b'] and list(ns['a']) == ref['a']
+        if ref['sos']:
+            ok = ok and ns['sos'].tolist() == ref['sos']
+        check(f"export python {spec}", ok, t[:300])
+        # MATLAB: parse the bracket contents
+        t = call("export matlab " + spec)['text']
+        def mat(name):
+            body = re.search(name + r" = \[(.*?)\];", t, re.S).group(1)
+            rows = [r for r in body.replace("...", "").split(";")]
+            return [[float(x) for x in r.split(",")] for r in rows]
+        ok = mat("b")[0] == ref['b'] and mat("a")[0] == ref['a']
+        if ref['sos']:
+            ok = ok and mat("sos") == ref['sos']
+        check(f"export matlab {spec}", ok, t[:300])
+        # C header: compile-free check of the array initializers and sizes
+        t = call("export c " + spec)['text']
+        def carr_(name):
+            body = re.search(r"lp_filter_" + name + r"\[[^=]*= \{(.*?)\};", t, re.S).group(1)
+            return [float(x) for x in re.findall(r"[-+0-9.eE]+", body)]
+        nb = int(re.search(r"#define LP_FILTER_NB (\d+)", t).group(1))
+        ok = carr_("b") == ref['b'] and carr_("a") == ref['a'] and nb == len(ref['b'])
+        if ref['sos']:
+            ok = ok and carr_("sos") == [v for row in ref['sos'] for v in row]
+        check(f"export c {spec}", ok, t[:300])
+        # CSV
+        t = call("export csv " + spec)['text']
+        rows = [l.split(",") for l in t.strip().split("\n")]
+        ok = rows[0] == ["b", "a"] and [float(r[0]) for r in rows[1:] if r[0]] == ref['b'] \
+            and [float(r[1]) for r in rows[1:] if r[1]] == ref['a']
+        check(f"export csv {spec}", ok, t[:300])
+    # invalid files give a readable error instead of a crash
+    for i, text in enumerate(['{"format": "x"}', '{"format": "pyfda_cpp filter", "spec": {"rt": "XX"}}',
+                              '{"format": "pyfda_cpp filter", "spec": {"N": 0}}', '[1, 2', '']):
+        fn = os.path.join(tmp, f"bad{i}.json")
+        with open(fn, 'w', encoding='utf-8') as f:
+            f.write(text)
+        r = call(f"fromjson {fn}")
+        check(f"fromjson invalid {i}", 'error' in r, str(r))
+
 proc.stdin.close()
 proc.wait()
 print(f"{n_pass} checks passed, {n_fail} failed")

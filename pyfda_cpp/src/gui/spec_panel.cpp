@@ -355,6 +355,44 @@ void SpecPanel::updateFromDesign(const FilterSpec &s) {
     storeFreqs();
 }
 
+QString SpecPanel::unitKey() const {
+    return m_unit->currentIndex() == 0 ? QString("f_S") : m_unit->currentText();
+}
+
+void SpecPanel::setSpec(const FilterSpec &s, const QString &unit) {
+    // unit and f_S without rescaling the frequencies
+    const int ui = unit == "f_S" ? 0 : std::max(0, m_unit->findText(unit));
+    m_unit->blockSignals(true);
+    m_unit->setCurrentIndex(ui);
+    m_unit->blockSignals(false);
+    m_fs->setEnabled(ui != 0);
+    m_lfs->setText("f_S" + (ui == 0 ? QString() : " / " + m_unit->currentText()) + " =");
+    m_fs_prev = ui == 0 ? 1.0 : s.f_s;
+    m_fs->setText(fmt(m_fs_prev));
+
+    m_rt->blockSignals(true);
+    m_rt->setCurrentIndex(int(s.rt));
+    m_rt->blockSignals(false);
+    m_cur_rt = int(s.rt);
+    const double fs = s.f_s;
+    m_freqs[m_cur_rt] = {s.f_pb / fs, s.f_pb2 / fs, s.f_sb / fs, s.f_sb2 / fs, s.f_c / fs, s.f_c2 / fs};
+    loadFreqs();
+
+    m_ft->setCurrentIndex(is_fir(s.method) ? 1 : 0);  // refills the method combo
+    m_method->setCurrentIndex(std::max(0, m_method->findData(int(s.method))));
+    (s.fo == OrderMode::Min ? m_min : m_man)->setChecked(true);
+    m_N->setValue(s.N);
+    m_window->setCurrentIndex(std::max(0, m_window->findData(int(s.window))));
+    m_winpar->setText(fmt(s.win_par));
+    m_alg->setCurrentIndex(int(s.order_alg));
+    m_apb->setText(fmt(s.A_PB));
+    m_asb->setText(fmt(s.A_SB));
+    m_wpb->setText(fmt(s.W_PB));
+    m_wsb->setText(fmt(s.W_SB));
+    updateVisibility();
+    emit unitsChanged();
+}
+
 void SpecPanel::setStatus(const QString &text, bool error) {
     m_status->setText(text);
     m_status->setStyleSheet(error ? "QLabel {color: #c00000; font-weight: bold}" : "");

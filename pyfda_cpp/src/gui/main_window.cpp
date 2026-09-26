@@ -2,18 +2,24 @@
 
 #include "coeffs_tab.hpp"
 #include "data_filt_tab.hpp"
+#include "filter_io.hpp"
 #include "logger.hpp"
 #include "response_tabs.hpp"
 #include "spec_panel.hpp"
 
 #include <QApplication>
 #include <QDateTime>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QScrollArea>
 #include <QSplitter>
 #include <QTabWidget>
+
+#include <cmath>
 
 using namespace pyfda;
 
@@ -37,7 +43,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     add(new GroupDelayView(this), QString::fromUtf8("τ(f)"), tr("Group delay"));
     add(new PoleZeroView(this), "P / Z", tr("Pole / zero plot"));
     add(new ImpulseView(this), "h[n]", tr("Impulse and step response"));
-    add(new CoeffsView(this), tr("Coeffs"), tr("Filter coefficients"));
+    m_coeffs = new CoeffsView(this);
+    add(m_coeffs, tr("Coeffs"), tr("Filter coefficients"));
     m_data_filt = new DataFiltView(this);
     add(m_data_filt, tr("Data Filt"), tr("Filter data from a file with the current design"));
 
@@ -58,7 +65,22 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     auto *file = menuBar()->addMenu(tr("&File"));
     file->addAction(tr("&Design filter"), QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { design(); });
-    file->addAction(tr("&Load data ..."), QKeySequence::Open, this, [this] {
+    file->addAction(tr("&Open filter ..."), QKeySequence::Open, this, [this] {
+        const QString fn = QFileDialog::getOpenFileName(this, tr("Open filter"), m_filter_dir,
+                                                        tr("pyfda_cpp filter (*.json);;All files (*)"));
+        if (!fn.isEmpty()) openFilter(fn);
+    });
+    file->addAction(tr("&Save filter ..."), QKeySequence::Save, this, [this] {
+        QString fn = QFileDialog::getSaveFileName(this, tr("Save filter"), m_filter_dir,
+                                                  tr("pyfda_cpp filter (*.json)"));
+        if (fn.isEmpty()) return;
+        if (QFileInfo(fn).suffix().isEmpty()) fn += ".json";
+        saveFilter(fn);
+    });
+    file->addAction(tr("&Export coefficients ..."), QKeySequence(Qt::CTRL | Qt::Key_E), this,
+                    [this] { m_coeffs->exportDialog(); });
+    file->addSeparator();
+    file->addAction(tr("&Load data ..."), QKeySequence(Qt::CTRL | Qt::Key_L), this, [this] {
         m_tabs->setCurrentWidget(m_data_filt);
         QMetaObject::invokeMethod(m_data_filt, "onLoad");
     });
@@ -107,6 +129,58 @@ bool MainWindow::design() {
         Logger::error(e.what());
         return false;
     }
+}
+
+bool MainWindow::openFilter(const QString &file_name) {
+    QFile f(file_name);
+    if (!f.open(QIODevice::ReadOnly)) {
+        Logger::error(tr("Couldn't open '%1'.").arg(file_name));
+        return false;
+    }
+    const QByteArray data = f.readAll();
+    FilterFile ff;
+    try {
+        ff = filter_from_json(std::string(data.constData(), size_t(data.size())));
+    } catch (const std::exception &e) {
+        Logger::error(tr("'%1': %2").arg(QFileInfo(file_name).fileName(), e.what()));
+        return false;
+    }
+    m_filter_dir = QFileInfo(file_name).absolutePath();
+    m_specs->setSpec(ff.spec, QString::fromStdString(ff.unit));
+    Logger::info(tr("Loaded filter '%1'.").arg(file_name));
+    if (!design()) return false;
+    // the stored coefficients are only for reference, warn if the design differs
+    // (e.g. file edited by hand or written by a different version)
+    auto differs = [](const Vec &a, const Vec &b) {
+        if (a.empty()) return false;  // not stored
+        if (a.size() != b.size()) return true;
+        double scale = 0, err = 0;
+        for (size_t i = 0; i < a.size(); ++i) {
+            scale = std::max(scale, std::fabs(b[i]));
+            err = std::max(err, std::fabs(a[i] - b[i]));
+        }
+        return err > 1e-9 * std::max(scale, 1e-300);
+    };
+    if (differs(ff.ba.b, m_design->ba.b) || differs(ff.ba.a, m_design->ba.a))
+        Logger::warning(tr("The coefficients stored in the file differ from the redesigned filter, "
+                           "the filter was designed from the specifications in the file."));
+    return true;
+}
+
+bool MainWindow::saveFilter(const QString &file_name) {
+    if (!m_design) {
+        Logger::error(tr("No filter designed yet."));
+        return false;
+    }
+    const std::string text = filter_to_json(*m_design, m_specs->unitKey().toStdString());
+    QFile f(file_name);
+    if (!f.open(QIODevice::WriteOnly) || f.write(text.data(), qint64(text.size())) != qint64(text.size())) {
+        Logger::error(tr("Couldn't write '%1'.").arg(file_name));
+        return false;
+    }
+    m_filter_dir = QFileInfo(file_name).absolutePath();
+    Logger::info(tr("Saved filter to '%1'.").arg(file_name));
+    return true;
 }
 
 void MainWindow::updateViews() {

@@ -17,9 +17,13 @@
 //   spectrum x
 //   csv <file>
 //   design key=value ...                     (see parse_spec)
+//   tojson unit key=value ...                filter file (JSON text) of a design
+//   fromjson <file>                          design from a filter file
+//   export <csv|matlab|c|python> key=value ...  exported coefficients as text
 #include "../src/core/conversions.hpp"
 #include "../src/core/data_io.hpp"
 #include "../src/core/filter_design.hpp"
+#include "../src/core/filter_io.hpp"
 #include "../src/core/filtering.hpp"
 #include "../src/core/fir_design.hpp"
 #include "../src/core/iir_design.hpp"
@@ -65,8 +69,13 @@ std::string sosarr(const Sos &sos) {
 std::string str(const std::string &s) {
     std::string o = "\"";
     for (char c : s) {
-        if (c == '"' || c == '\\') o += '\\';
-        o += c;
+        if (c == '\n') o += "\\n";
+        else if (c == '\t') o += "\\t";
+        else if (c == '\r') o += "\\r";
+        else {
+            if (c == '"' || c == '\\') o += '\\';
+            o += c;
+        }
     }
     return o + "\"";
 }
@@ -245,6 +254,28 @@ std::string run(const std::string &line) {
         return "{\"N\":" + std::to_string(d.spec.N) + ",\"f_c\":" + num(d.spec.f_c) + ",\"f_c2\":" + num(d.spec.f_c2) +
                ",\"W_PB\":" + num(d.spec.W_PB) + ",\"W_SB\":" + num(d.spec.W_SB) + ",\"win_par\":" + num(d.spec.win_par) +
                ",\"b\":" + arr(d.ba.b) + ",\"a\":" + arr(d.ba.a) + ",\"sos\":" + sosarr(d.sos) + "}";
+    }
+    if (cmd == "tojson") {
+        std::string unit;
+        in >> unit;
+        return "{\"json\":" + str(filter_to_json(design_filter(parse_spec(in)), unit)) + "}";
+    }
+    if (cmd == "fromjson") {
+        std::string f;
+        std::getline(in >> std::ws, f);
+        const FilterFile ff = load_filter(f);
+        const FilterDesign d = design_filter(ff.spec);
+        return "{\"unit\":" + str(ff.unit) + ",\"rt\":" + str(resp_type_key(ff.spec.rt)) + ",\"method\":" +
+               str(method_key(ff.spec.method)) + ",\"N\":" + std::to_string(d.spec.N) + ",\"b\":" + arr(d.ba.b) +
+               ",\"a\":" + arr(d.ba.a) + ",\"sos\":" + sosarr(d.sos) + ",\"file_b\":" + arr(ff.ba.b) +
+               ",\"file_a\":" + arr(ff.ba.a) + ",\"file_sos\":" + sosarr(ff.sos) + "}";
+    }
+    if (cmd == "export") {
+        std::string f;
+        in >> f;
+        static const std::map<std::string, CoeffFormat> fm = {{"csv", CoeffFormat::Csv}, {"matlab", CoeffFormat::Matlab},
+                                                             {"c", CoeffFormat::CHeader}, {"python", CoeffFormat::Python}};
+        return "{\"text\":" + str(export_coeffs(design_filter(parse_spec(in)), fm.at(f), "lp filter")) + "}";
     }
     throw DesignError("unknown command " + cmd);
 }
