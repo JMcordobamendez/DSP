@@ -140,6 +140,12 @@ for wname, fn in WINDOWS.items():
         r = call(f"window {wname} {M} {par}")
         close(f"window {wname} M={M}", r['w'], fn(M, par), 1e-9 if wname == 'dpss' else 1e-12, 1e-15)
 
+# general Gaussian (pyfda: spectral analysis only), shape p and sigma in samples
+for M, p, sg in ((7, 1.5, 5), (32, 1.0, 4), (101, 0.5, 20), (256, 3, 40)):
+    r = call(f"window general_gaussian {M} {p} {sg}")
+    close(f"window general_gaussian M={M} p={p}", r['w'], sig.windows.general_gaussian(M, p, sg, sym=True), 1e-12, 1e-15)
+    close(f"fft window general_gaussian M={M} p={p}", r['fft'], sig.get_window(('general_gaussian', p, sg), M), 1e-12, 1e-15)
+
 for numtaps, cutoff, pz in ((31, [0.3], 1), (32, [0.3], 1), (41, [0.4], 0),
                             (51, [0.2, 0.5], 0), (61, [0.2, 0.5], 1), (80, [0.1, 0.3], 0)):
     for wname in ('hamming', 'kaiser', 'blackman'):

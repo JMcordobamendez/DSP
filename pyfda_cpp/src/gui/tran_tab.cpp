@@ -256,6 +256,9 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     m_lbl_win_par = new QLabel(this);
     m_win_par = new QLineEdit(this);
     m_win_par->setMaximumWidth(60);
+    m_lbl_win_par2 = new QLabel(this);
+    m_win_par2 = new QLineEdit(this);
+    m_win_par2->setMaximumWidth(60);
     cf->addWidget(m_f_stim);
     cf->addWidget(m_f_resp);
     cf->addWidget(m_f_hid);
@@ -266,6 +269,8 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     cf->addWidget(m_win);
     cf->addWidget(m_lbl_win_par);
     cf->addWidget(m_win_par);
+    cf->addWidget(m_lbl_win_par2);
+    cf->addWidget(m_win_par2);
     cf->addStretch(1);
     vf->addLayout(cf);
     m_plot_f = new PlotWidget(this);
@@ -351,10 +356,12 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     connect(m_win, &QComboBox::currentIndexChanged, this, [this] {
         const auto &w = window_list()[m_win->currentIndex()];
         if (w.par_name) m_win_par->setText(fmt(w.par_default));
+        if (w.par2_name) m_win_par2->setText(fmt(w.par2_default));
         updateVisibility();
         redrawNow();
     });
     connect(m_win_par, &QLineEdit::editingFinished, this, [this] { redrawNow(); });
+    connect(m_win_par2, &QLineEdit::editingFinished, this, [this] { redrawNow(); });
     for (QComboBox *c : {m_s_sig, m_s_mode})
         connect(c, &QComboBox::currentIndexChanged, this, [this] {
             m_s_db->setEnabled(m_s_mode->currentIndex() != 2);
@@ -505,6 +512,9 @@ void TranView::updateVisibility() {
     m_lbl_win_par->setVisible(w.par_name != nullptr);
     m_win_par->setVisible(w.par_name != nullptr);
     if (w.par_name) m_lbl_win_par->setText(QString(w.par_name) + ":");
+    m_lbl_win_par2->setVisible(w.par2_name != nullptr);
+    m_win_par2->setVisible(w.par2_name != nullptr);
+    if (w.par2_name) m_lbl_win_par2->setText(QString(w.par2_name) + ":");
 }
 
 // display value <-> normalized value
@@ -698,6 +708,14 @@ void TranView::redraw() {
     drawSpgr();
 }
 
+Vec TranView::analysisWindow(int N) const {
+    const auto &wi = window_list()[m_win->currentIndex()];
+    double par = wi.par_default, par2 = wi.par2_default;
+    if (wi.par_name && !parse(m_win_par, par)) par = wi.par_default;
+    if (wi.par2_name && !parse(m_win_par2, par2)) par2 = wi.par2_default;
+    return fft_window(wi.type, N, par, par2);
+}
+
 void TranView::drawSpgr() {
     m_plot_s->clear();
     m_plot_s->setXLabel(m_ctx.t_label);
@@ -716,13 +734,11 @@ void TranView::drawSpgr() {
     if (nfft > N) nfft = N;
     if (novl >= nfft) novl = 0;
     const auto &wi = window_list()[m_win->currentIndex()];
-    double par = wi.par_default;
-    if (wi.par_name && !parse(m_win_par, par)) par = wi.par_default;
     const int mode_i = m_s_mode->currentIndex();
     const SpgrMode mode = mode_i == 0 ? SpgrMode::PSD : mode_i == 1 ? SpgrMode::Magnitude : SpgrMode::Angle;
     Spectrogram sp;
     try {
-        const Vec win = fft_window(wi.type, nfft, par);
+        const Vec win = analysisWindow(nfft);
         if (m_cmplx) {  // two-sided
             CVec c(s.size());
             for (size_t i = 0; i < s.size(); ++i) c[i] = cplx(s[i], si[size_t(m_n_start) + i]);
@@ -840,9 +856,14 @@ void TranView::drawFreq() {
     }
     const int N = int(m_x.size()) - m_n_start;
     const auto &wi = window_list()[m_win->currentIndex()];
-    double par = wi.par_default;
-    if (wi.par_name && !parse(m_win_par, par)) par = wi.par_default;
-    const Vec win = fft_window(wi.type, N, par);
+    Vec win;
+    try {
+        win = analysisWindow(N);
+    } catch (const std::exception &e) {
+        m_plot_f->setMessage(e.what());
+        m_plot_f->autoscale();
+        return;
+    }
     const double cgain = window_cgain(win), nenbw = window_nenbw(win);
     auto spectrum = [&](const Vec &re, const Vec &im) {
         if (!m_cmplx) return windowed_fft(Vec(re.begin() + m_n_start, re.end()), win);

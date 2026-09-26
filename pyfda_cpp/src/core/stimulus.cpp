@@ -464,9 +464,9 @@ std::string stim_title(const StimParams &p, bool step_error) {
 // ---------------------------------------------------------------------------
 // spectra
 
-Vec fft_window(WindowType type, int N, double par) {
+Vec fft_window(WindowType type, int N, double par, double par2) {
     if (N < 1) return {};
-    Vec w = get_window(type, N + 1, par);
+    Vec w = get_window(type, N + 1, par, par2);
     w.pop_back();
     return w;
 }

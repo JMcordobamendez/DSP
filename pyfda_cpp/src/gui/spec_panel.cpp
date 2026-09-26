@@ -98,7 +98,8 @@ SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
 
     m_lwindow = new QLabel(tr("Window:"), this);
     m_window = new QComboBox(this);
-    for (const auto &w : window_list()) m_window->addItem(w.name, int(w.type));
+    for (const auto &w : window_list())
+        if (w.fir) m_window->addItem(w.name, int(w.type));  // the others are for spectral analysis only
     m_window->setCurrentIndex(m_window->findText("Kaiser"));
     fSel->addRow(m_lwindow, m_window);
     m_lwinpar = new QLabel(tr("beta:"), this);

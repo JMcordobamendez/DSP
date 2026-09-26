@@ -50,6 +50,8 @@ private:
     void drawFreq();
     void drawSpgr();
     void applyFileNorm();
+    /// Periodic window of the spectral analysis with the parameters of the Frequency tab
+    pyfda::Vec analysisWindow(int N) const;
     void changed();
 
     pyfda::StimParams m_p;
@@ -67,9 +69,9 @@ private:
     QCheckBox *m_bl, *m_step_err;
     QMap<QString, QLineEdit *> m_edits;       // parameter edits by key
     QMap<QString, QWidget *> m_param_widgets;  // label + edit containers by key
-    QLineEdit *m_noi, *m_win_par;
+    QLineEdit *m_noi, *m_win_par, *m_win_par2;
     QSpinBox *m_N, *m_N_start, *m_mls_b;
-    QLabel *m_lbl_mls, *m_lbl_win_par, *m_info;
+    QLabel *m_lbl_mls, *m_lbl_win_par, *m_lbl_win_par2, *m_info;
     QTabWidget *m_tabs;
     PlotWidget *m_plot_t, *m_plot_ti, *m_plot_f, *m_plot_s;
     QLabel *m_lbl_cmplx;

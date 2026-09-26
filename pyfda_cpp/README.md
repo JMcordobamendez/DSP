@@ -136,8 +136,9 @@ pyfda usa `N` como número de coeficientes en el método de ventana.
 * Ventanas nuevas: Bartlett-Hann, Bohman, Cosine, Parzen, Triangular, **Dolph-Chebyshev**
   (atenuación de lóbulos laterales) y **DPSS/Slepian** (NW, autovector de la matriz
   tridiagonal por bisección e iteración inversa). Idénticas a `scipy.signal.get_window`.
-  Sirven para el método de ventana, el análisis espectral y el espectrograma. Falta
-  `general_gaussian` (dos parámetros).
+  Sirven para el método de ventana, el análisis espectral y el espectrograma. Para el
+  análisis espectral (como en pyfda) también **General Gaussian** con dos parámetros
+  (forma p y σ en muestras).
 * Unidades de frecuencia como en pyfda: f_S y **f_Ny** normalizadas, **mHz**, Hz, kHz, MHz y
   **GHz**. (La unidad `k` está desactivada en pyfda.)
 * Especificaciones de amplitud en **dB, V o W** (`unit2lin`/`lin2unit` de pyfda, distintas
@@ -238,7 +239,6 @@ Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 
 * Edición de polos/ceros arrastrándolos en la gráfica P/Z.
 * Traducciones.
-* Ventana `general_gaussian`.
 
 ## Licencias
 

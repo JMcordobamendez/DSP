@@ -28,6 +28,8 @@ const std::vector<WindowInfo> &window_list() {
         {WindowType::Triang, "Triangular", nullptr, 0},
         {WindowType::Chebwin, "Dolph-Chebyshev", "a / dB", 80.0},
         {WindowType::DPSS, "DPSS (Slepian)", "NW", 3.0},
+        // pyfda: shape p (1: Gaussian, 0.5: Laplace) and standard deviation sigma in samples
+        {WindowType::GeneralGaussian, "General Gaussian", "p", 1.5, "sigma", 5.0, false},
     };
     return list;
 }
@@ -137,7 +139,7 @@ Vec dpss(int M, double NW) {
 }
 }  // namespace
 
-Vec get_window(WindowType type, int M, double par) {
+Vec get_window(WindowType type, int M, double par, double par2) {
     if (M < 1) return {};
     if (M == 1) return {1.0};
     Vec w(M, 1.0);
@@ -219,6 +221,10 @@ Vec get_window(WindowType type, int M, double par) {
     }
     case WindowType::Chebwin: w = chebwin(M, par); break;
     case WindowType::DPSS: w = dpss(M, par); break;
+    case WindowType::GeneralGaussian:  // scipy.signal.windows.general_gaussian
+        if (par2 <= 0) throw DesignError("General Gaussian window: sigma must be > 0.");
+        for (int n = 0; n < M; ++n) w[size_t(n)] = std::exp(-0.5 * std::pow(std::fabs((n - (M - 1) / 2.0) / par2), 2 * par));
+        break;
     }
     return w;
 }

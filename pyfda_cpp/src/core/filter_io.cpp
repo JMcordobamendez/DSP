@@ -83,7 +83,7 @@ std::string lower(std::string s) {
 
 WindowType window_from_name(const std::string &n) {
     for (const auto &w : window_list())
-        if (lower(w.name) == lower(n)) return w.type;
+        if (lower(w.name) == lower(n) && w.fir) return w.type;  // only windows for the FIR design
     throw DesignError("Unknown window '" + n + "'");
 }
 

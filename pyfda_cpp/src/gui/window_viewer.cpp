@@ -31,6 +31,9 @@ WindowViewer::WindowViewer(QWidget *parent) : QDialog(parent) {
     m_lpar = new QLabel(this);
     m_par = new QLineEdit(this);
     m_par->setMaximumWidth(70);
+    m_lpar2 = new QLabel(this);
+    m_par2 = new QLineEdit(this);
+    m_par2->setMaximumWidth(70);
     m_N = new QSpinBox(this);
     m_N->setRange(2, 1 << 16);
     m_N->setValue(128);
@@ -41,6 +44,8 @@ WindowViewer::WindowViewer(QWidget *parent) : QDialog(parent) {
     ctl->addWidget(m_win);
     ctl->addWidget(m_lpar);
     ctl->addWidget(m_par);
+    ctl->addWidget(m_lpar2);
+    ctl->addWidget(m_par2);
     ctl->addWidget(new QLabel("N =", this));
     ctl->addWidget(m_N);
     ctl->addWidget(m_log);
@@ -60,9 +65,11 @@ WindowViewer::WindowViewer(QWidget *parent) : QDialog(parent) {
     connect(m_win, &QComboBox::currentIndexChanged, this, [this] {
         const auto &w = window_list()[m_win->currentIndex()];
         if (w.par_name) m_par->setText(QString::number(w.par_default));
+        if (w.par2_name) m_par2->setText(QString::number(w.par2_default));
         update();
     });
     connect(m_par, &QLineEdit::editingFinished, this, &WindowViewer::update);
+    connect(m_par2, &QLineEdit::editingFinished, this, &WindowViewer::update);
     connect(m_N, &QSpinBox::valueChanged, this, &WindowViewer::update);
     connect(m_log, &QCheckBox::toggled, this, &WindowViewer::update);
     update();
@@ -80,15 +87,20 @@ void WindowViewer::update() {
     m_lpar->setVisible(wi.par_name != nullptr);
     m_par->setVisible(wi.par_name != nullptr);
     if (wi.par_name) m_lpar->setText(QString(wi.par_name) + ":");
+    m_lpar2->setVisible(wi.par2_name != nullptr);
+    m_par2->setVisible(wi.par2_name != nullptr);
+    if (wi.par2_name) m_lpar2->setText(QString(wi.par2_name) + ":");
     bool ok = false;
     double par = m_par->text().toDouble(&ok);
     if (!ok) par = wi.par_default;
+    double par2 = m_par2->text().toDouble(&ok);
+    if (!ok) par2 = wi.par2_default;
     const int N = m_N->value();
     m_time->clear();
     m_freq->clear();
     Vec w;
     try {
-        w = fft_window(wi.type, N, par);
+        w = fft_window(wi.type, N, par, par2);
     } catch (const std::exception &e) {
         m_time->setMessage(e.what());
         m_time->autoscale();

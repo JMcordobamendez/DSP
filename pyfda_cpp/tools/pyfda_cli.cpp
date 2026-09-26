@@ -42,6 +42,7 @@
 #include "../src/core/poly.hpp"
 #include "../src/core/stimulus.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
@@ -113,7 +114,9 @@ WindowType win_type(const std::string &n) {
     for (const auto &w : window_list()) {
         std::string name = w.name;
         for (char &c : name) c = char(std::tolower(c));
-        if (name == n || name.substr(0, name.find(' ')) == n) return w.type;
+        std::string under = name;
+        std::replace(under.begin(), under.end(), ' ', '_');
+        if (name == n || under == n || name.substr(0, name.find(' ')) == n) return w.type;
     }
     throw DesignError("unknown window " + n);
 }
@@ -272,12 +275,13 @@ std::string run(const std::string &line) {
         else o = ellipord(list(wp), list(ws), gp, gs);
         return "{\"N\":" + std::to_string(o.N) + ",\"Wn\":" + arr(o.Wn) + "}";
     }
-    if (cmd == "window") {
+    if (cmd == "window") {  // window <name> <M> <par> [<par2>]
         std::string n;
         int M;
-        double par;
+        double par, par2 = 0;
         in >> n >> M >> par;
-        return "{\"w\":" + arr(get_window(win_type(n), M, par)) + "}";
+        if (!(in >> par2)) par2 = 0;
+        return "{\"w\":" + arr(get_window(win_type(n), M, par, par2)) + ",\"fft\":" + arr(fft_window(win_type(n), M, par, par2)) + "}";
     }
     if (cmd == "firwin") {
         int numtaps, pz;

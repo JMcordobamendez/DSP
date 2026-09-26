@@ -21,7 +21,8 @@ private:
     void update();
 
     QComboBox *m_win;
-    QLineEdit *m_par;
+    QLineEdit *m_par, *m_par2;
+    QLabel *m_lpar2;
     QLabel *m_lpar, *m_props;
     QSpinBox *m_N;
     QCheckBox *m_log;

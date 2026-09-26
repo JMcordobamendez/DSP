@@ -98,7 +98,7 @@ std::vector<int> max_len_seq(int nbits, std::vector<int> &state, int length);
 
 // --- spectra for the transient analysis
 /// Periodic window for spectral analysis (scipy.signal.get_window(..., fftbins=True))
-Vec fft_window(WindowType type, int N, double par = 0.0);
+Vec fft_window(WindowType type, int N, double par = 0.0, double par2 = 0.0);
 /// Coherent gain (mean of window) and normalized equivalent noise bandwidth
 double window_cgain(const Vec &win);
 double window_nenbw(const Vec &win);
