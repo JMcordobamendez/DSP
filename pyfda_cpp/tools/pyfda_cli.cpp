@@ -400,6 +400,15 @@ std::string run(const std::string &line) {
         return "{\"x\":" + arr(xr) + ",\"xi\":" + arr(xi) + ",\"complex\":" + (cmplx ? "true" : "false") +
                ",\"title\":" + str(stim_title(p)) + ",\"scale\":" + num(impulse_scale(p)) + "}";
     }
+    if (cmd == "hmag") {  // hmag <b> <a> <re> <im>: |H(z)| at z = re + j im (lists)
+        std::string b, a, re, im;
+        in >> b >> a >> re >> im;
+        const Ba ba{list(b), list(a)};
+        const Vec r = list(re), i = list(im);
+        Vec m;
+        for (size_t k = 0; k < r.size(); ++k) m.push_back(h_mag_z(ba, cplx(r[k], i[k])));
+        return "{\"m\":" + arr(m) + "}";
+    }
     if (cmd == "wprops") {  // wprops <window> <N> <par>
         std::string w;
         int n;

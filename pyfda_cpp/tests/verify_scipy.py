@@ -947,6 +947,18 @@ check("complex amplitude sets complex flag", r['complex'] is True and max(map(ab
 r = call("stim 20 stim=step a1=1 a2_im=1")  # A2 is not used by the step
 check("unused complex amplitude is ignored", r['complex'] is False, str(r)[:100])
 
+# ---- |H(z)| on the z-plane (pyfda's 3D plot, h_mag without clipping) ----
+b3, a3 = sig.ellip(5, 1, 50, 0.3)
+zr = np.linspace(-1.4, 1.3, 37)
+zg = (zr[:, None] + 1j * zr[None, ::-1]).ravel()
+r = call(f"hmag {L(b3)} {L(a3)} {L(zg.real)} {L(zg.imag)}")
+ref = np.abs(np.polyval(b3[::-1], 1 / zg) / np.polyval(a3[::-1], 1 / zg))
+close("3d |H(z)|", r['m'], ref, 1e-9)
+r = call(f"hmag {L([1, 2, 1])} {L([1])} {L([0.5, 0])} {L([0.5, 0])}")
+check("3d |H(z)| FIR at z = 0 is inf", r['m'][0] > 0 and r['m'][1] == float("inf"), str(r))
+r = call(f"hmag {L(b3)} {L(a3)} {L([0])} {L([0])}")
+close("3d |H(0)| of an IIR filter (limit)", r['m'], [abs(b3[-1] / a3[-1])], 1e-12)
+
 # ---- spectrogram (scipy.signal.spectrogram, detrend='constant', one-sided) ----
 xs = np.sin(2 * np.pi * 0.05 * np.arange(700) ** 1.3 / 30) + 0.2 * rng.normal(size=700) + 0.3
 for mode in ("psd", "magnitude", "angle"):

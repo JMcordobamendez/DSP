@@ -1,5 +1,7 @@
 #include "filter_info.hpp"
 
+#include <limits>
+
 #include "conversions.hpp"
 
 #include <algorithm>
@@ -97,6 +99,31 @@ FilterInfo filter_info(const FilterDesign &d) {
         break;
     }
     return fi;
+}
+
+double h_mag_z(const Ba &ba, cplx z) {
+    if (z == cplx(0, 0)) {  // limit z -> 0: ratio of the highest order terms
+        auto last = [](const Vec &c) {
+            size_t n = c.size();
+            while (n > 0 && c[n - 1] == 0) --n;
+            return n;  // index of the highest nonzero coefficient + 1
+        };
+        const size_t nb = last(ba.b), na = last(ba.a);
+        if (nb == 0) return 0.0;
+        if (na == 0 || nb > na) return std::numeric_limits<double>::infinity();
+        return nb < na ? 0.0 : std::fabs(ba.b[nb - 1] / ba.a[na - 1]);
+    }
+    // Horner scheme in w = 1 / z
+    const cplx w = cplx(1.0, 0.0) / z;
+    auto poly = [&](const Vec &c) {
+        cplx acc = 0;
+        for (size_t i = c.size(); i-- > 0;) acc = acc * w + c[i];
+        return acc;
+    };
+    const cplx num = poly(ba.b), den = poly(ba.a);
+    if (den == cplx(0, 0)) return std::numeric_limits<double>::infinity();
+    const double m = std::abs(num / den);
+    return std::isnan(m) ? std::numeric_limits<double>::infinity() : m;
 }
 
 }  // namespace pyfda

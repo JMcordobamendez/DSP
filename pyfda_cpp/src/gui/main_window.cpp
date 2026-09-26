@@ -4,6 +4,7 @@
 #include "data_filt_tab.hpp"
 #include "fixpoint_tab.hpp"
 #include "info_tab.hpp"
+#include "plot_3d.hpp"
 #include "window_viewer.hpp"
 #include "filter_io.hpp"
 #include "logger.hpp"
@@ -56,6 +57,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     add(new PhaseView(this), QString::fromUtf8("φ(f)"), tr("Phase response"));
     add(new GroupDelayView(this), QString::fromUtf8("τ(f)"), tr("Group delay"));
     add(new PoleZeroView(this), "P / Z", tr("Pole / zero plot"));
+    add(new ThreeDView(this), "3D", tr("3D magnitude response |H(z)|"));
     add(new ImpulseView(this), "h[n]", tr("Impulse and step response"));
     m_tran = new TranView(this);
     add(m_tran, "y[n]", tr("Transient analysis: stimulus and response in the time and frequency domain"));

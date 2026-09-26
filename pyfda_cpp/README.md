@@ -192,6 +192,15 @@ Como en pyfda, el análisis transitorio y Data Filt trabajan con señales comple
 Comparado con numpy (fórmulas, estímulos), scipy (`spectrogram(..., return_onesided=False)`,
 `sosfilt` de datos complejos) y la lectura de ficheros de numpy.
 
+## Fase 11: gráfica 3D
+
+Pestaña **3D** (como `plot_3d` de pyfda): |H(z)| sobre el plano z como **superficie**
+coloreada (viridis, con sombreado) o **malla**, dentro del círculo unidad (rejilla polar) o
+en |Re|, |Im| < 1,5, escala lineal o en dB con límites inferior y superior (la superficie
+se recorta ahí), |H(f)| a lo largo del círculo unidad, el círculo unidad, polos (x) y ceros
+(o) con sus tallos y barra de color. Se gira arrastrando con el ratón, se amplía con la
+rueda y doble clic restablece la vista. |H(z)| está comparado con numpy.
+
 ## Verificación
 
 ```
@@ -227,7 +236,6 @@ Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 
 ## Pendiente para siguientes fases
 
-* Gráfica 3D.
 * Edición de polos/ceros arrastrándolos en la gráfica P/Z.
 * Traducciones.
 * Ventana `general_gaussian`.

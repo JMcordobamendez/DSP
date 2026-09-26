@@ -33,4 +33,8 @@ struct FilterInfo {
 
 FilterInfo filter_info(const FilterDesign &d);
 
+/// |H(z)| = |B(z) / A(z)| with the coefficients in powers of z^-1 (pyfda's h_mag
+/// for the 3D plot, without clipping); inf at poles, z = 0 for IIR filters etc.
+double h_mag_z(const Ba &ba, cplx z);
+
 }  // namespace pyfda
