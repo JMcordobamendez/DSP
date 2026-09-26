@@ -35,6 +35,12 @@ jobs:
       - name: Compare with scipy
         run: python pyfda_cpp/tests/verify_scipy.py build/pyfda_cli
 
+      - name: Simulate the generated VHDL with GHDL
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ghdl
+          python pyfda_cpp/tests/verify_vhdl.py build/pyfda_cli
+
   build-windows:
     runs-on: windows-latest
     steps:

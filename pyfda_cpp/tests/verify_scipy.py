@@ -604,6 +604,105 @@ for w, par in [("rectangular", 0), ("hann", 0), ("kaiser", 8), ("flattop", 0)]:
     close(f"ssb {w}", cplx(r['ssb']), np.insert(X[1:32] * 2, 0, X[0]), 1e-12, 1e-14)
     close(f"nenbw {w}", [r['nenbw']], [64 * np.sum(win**2) / np.sum(win)**2], 1e-12)
 
+# ---------------------------------------------------------------------------
+# fixpoint: reference = pyfda.libs.pyfda_fix_lib.Fixed.fixp() ('qfrac'), rewritten
+# without the filterbroker; the C++ quantizer was also compared bit exact with
+# pyfda itself (285 formats) and with fir_df_pyfixp
+def fixp_py(y, WI, WF, quant, ovfl):
+    y = np.asarray(y, dtype=float) * 2.0**WF
+    yq = {'floor': np.floor, 'round': np.round, 'fix': np.trunc, 'ceil': np.ceil,
+          'none': lambda v: v}[quant](y)
+    n_over = 0
+    if ovfl != 'none':
+        MSB = 2.0**(WI + WF - 1)
+        MAX, MIN = 2 * MSB - 1, -2 * MSB
+        over_neg, over_pos = yq < MIN, yq > MAX
+        n_over = int(np.sum(over_neg) + np.sum(over_pos))
+        if ovfl == 'sat':
+            yq = np.where(over_pos, MAX, np.where(over_neg, MIN, yq))
+        else:
+            yq = np.where(over_pos | over_neg,
+                          yq - 4. * MSB * np.trunc((np.sign(yq) * 2 * MSB + yq) / (4 * MSB)), yq)
+    return yq / 2.0**WF, n_over
+
+
+rng = np.random.default_rng(1)
+for WI in [0, 1, 3, 7]:
+    for WF in [0, 3, 8, 15, 30]:
+        if WI + WF == 0:
+            continue
+        for quant in ['floor', 'round', 'fix', 'ceil', 'none']:
+            for ovfl in ['wrap', 'sat', 'none']:
+                x = rng.normal(0, 2**WI * 1.5, 100)
+                x[:4] = [0.5 / 2**WF, 1.5 / 2**WF, -2.5 / 2**WF, 2**WI]
+                ref, n_over = fixp_py(x, WI, WF, quant, ovfl)
+                r = call(f"fixp {WI} {WF} {quant} {ovfl} {L(x)}")
+                check(f"fixp {WI}.{WF} {quant} {ovfl}", r['y'] == list(ref) and r['n_over'] == n_over,
+                      f"{r['n_over']} vs {n_over}")
+for v, W in [(-5, 8), (1234, 16), (0, 4), (-1, 12), (127, 8), (-128, 8), (5, 3)]:
+    r = call(f"fxbase {v} {W}")
+    u = v & ((1 << W) - 1)
+    csd_val = sum({'+': 1, '-': -1, '0': 0}[c] * 2**i for i, c in enumerate(reversed(r['csd'])))
+    nonadj = all(not (a != '0' and b != '0') for a, b in zip(r['csd'], r['csd'][1:]))
+    check(f"fxbase {v} {W}", r['bin'] == format(u, f'0{W}b') and int(r['hex'], 16) == u
+          and int(r['oct'], 8) == u and csd_val == v and nonadj, str(r))
+
+
+def fx_fir_py(b, x, qi, qcb, qacc, qo):
+    bq, _ = fixp_py(b, *qcb)
+    xq, _ = fixp_py(x, *qi)
+    y = np.zeros(len(x))
+    for k in range(len(x)):
+        prods = [fixp_py(xq[k - i] * bq[i], *qacc)[0] for i in range(min(len(bq), k + 1))]
+        y[k] = fixp_py(fixp_py(np.sum(prods), *qacc)[0], *qo)[0]
+    return y
+
+
+def fx_sos_py(sos, x, qi, qcb, qca, qacc, qo):
+    s, _ = fixp_py(x, *qi)
+    for sec in sos:
+        b, _ = fixp_py(sec[:3], *qcb)
+        a, _ = fixp_py(sec[4:], *qca)
+        y = np.zeros(len(s))
+        for n in range(len(s)):
+            xs = [s[n - i] if n - i >= 0 else 0 for i in range(3)]
+            ys = [y[n - i] if n - i >= 0 else 0 for i in (1, 2)]
+            acc_b = sum(fixp_py(b[i] * xs[i], *qacc)[0] for i in range(3))
+            acc_a = sum(fixp_py(a[i] * ys[i], *qacc)[0] for i in range(2))
+            y[n] = fixp_py(fixp_py(acc_b - acc_a, *qacc)[0], *qo)[0]
+        s = y
+    return s
+
+
+fq = lambda t: ",".join(map(str, t))
+fx_cases = [((0, 15, 'round', 'sat'), (0, 15, 'round', 'sat'), (1, 14, 'round', 'sat'), (2, 30, 'floor', 'wrap'),
+             (0, 15, 'round', 'sat')),
+            ((0, 7, 'round', 'sat'), (0, 7, 'floor', 'wrap'), (1, 6, 'round', 'sat'), (1, 9, 'round', 'wrap'),
+             (0, 5, 'fix', 'sat')),
+            ((2, 3, 'round', 'sat'), (1, 5, 'round', 'sat'), (1, 5, 'floor', 'sat'), (3, 6, 'floor', 'sat'),
+             (1, 4, 'round', 'wrap'))]
+x = rng.normal(0, 0.4, 200)
+b_fir = sig.firwin(21, 0.3) * np.linspace(0.8, 1.2, 21)  # asymmetric to check the order of the taps
+sos_iir = sig.ellip(4, 1, 40, 0.2, output='sos')
+for qi, qcb, qca, qacc, qo in fx_cases:
+    keys = f"qi={fq(qi)} qcb={fq(qcb)} qacc={fq(qacc)} qo={fq(qo)}"
+    r = call(f"fxfir {L(b_fir)} {L(x)} {keys}")
+    check(f"fxfir {keys}", r['y'] == list(fx_fir_py(b_fir, x, qi, qcb, qacc, qo)), str(r)[:200])
+    r = call(f"fxsos {L(sos_iir)} {L(x)} {keys} qca={fq(qca)}")
+    check(f"fxsos {keys}", r['y'] == list(fx_sos_py(sos_iir, x, qi, qcb, qca, qacc, qo)), str(r)[:200])
+# with enough bits the fixpoint response is close to the floating point response
+r = call(f"fxfir {L(b_fir)} {L(x)} qi=3,31,round,sat qcb=0,31,round,sat qacc=6,62,floor,wrap qo=4,31,round,sat")
+close("fxfir 32 bit vs lfilter", r['y'], sig.lfilter(b_fir, 1, x), 0, 1e-8)
+r = call(f"fxsos {L(sos_iir)} {L(x)} qi=3,31,round,sat qcb=1,30,round,sat qca=1,30,round,sat "
+         "qacc=8,61,floor,wrap qo=4,31,round,sat")
+close("fxsos 32 bit vs sosfilt", r['y'], sig.sosfilt(sos_iir, x), 0, 1e-7)
+r = call(f"fxauto fir {L(b_fir)} qi=0,15,round,sat qcb=0,15,round,sat qacc=0,0,floor,wrap qo=0,15,round,sat")
+check("fxauto fir", r['qcb'] == [0, 15] and r['qacc'] == [0 + 0 + int(np.ceil(np.log2(np.sum(np.abs(b_fir))))), 30],
+      str(r))
+r = call(f"fxauto sos {L(sos_iir)} qi=0,15,round,sat qcb=0,15,round,sat qca=0,14,round,sat qacc=0,0,floor,wrap "
+         "qo=0,15,round,sat")
+check("fxauto sos", r["qcb"] == [1, 15] and r["qca"] == [1, 14] and r["qacc"] == [1 + 3, 30], str(r))
+
 proc.stdin.close()
 proc.wait()
 print(f"{n_pass} checks passed, {n_fail} failed")

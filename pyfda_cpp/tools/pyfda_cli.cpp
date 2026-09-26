@@ -22,11 +22,20 @@
 //   export <csv|matlab|c|python> key=value ...  exported coefficients as text
 //   stim n_end key=value ...                 stimulus (see parse_stim)
 //   wfft <window> par x                      windowed FFT (pyfda transient analysis)
+//   fixp WI WF quant ovfl x                  quantize, returns values and overflows
+//   fxbase v W                               v in bin, oct, hex and csd
+//   fxfir b x key=WI,WF,quant,ovfl ...       fixpoint FIR (keys qi qcb qacc qo)
+//   fxsos sos x key=WI,WF,quant,ovfl ...     fixpoint SOS cascade (keys qi qcb qca qacc qo)
+//   fxauto <fir|sos> coeffs key=... ...      automatic formats
+//   coe radix b WI,WF,quant,ovfl             Xilinx COE file
+//   vhdl <fir|sos> coeffs key=... ...        VHDL entity (name fir_filter / iir_filter)
 #include "../src/core/conversions.hpp"
 #include "../src/core/data_io.hpp"
 #include "../src/core/filter_design.hpp"
 #include "../src/core/filter_io.hpp"
 #include "../src/core/filtering.hpp"
+#include "../src/core/fixpoint.hpp"
+#include "../src/core/hdl_export.hpp"
 #include "../src/core/fir_design.hpp"
 #include "../src/core/iir_design.hpp"
 #include "../src/core/poly.hpp"
@@ -176,6 +185,36 @@ StimParams parse_stim(std::istringstream &in) {
     }
     return p;
 }
+
+QFormat parse_q(const std::string &v) {
+    std::stringstream ss(v);
+    std::string wi, wf, q, o;
+    std::getline(ss, wi, ',');
+    std::getline(ss, wf, ',');
+    std::getline(ss, q, ',');
+    std::getline(ss, o, ',');
+    return QFormat{std::stoi(wi), std::stoi(wf), quant_from_key(q), ovfl_from_key(o)};
+}
+
+FxSpec parse_fx(std::istringstream &in) {
+    FxSpec s;
+    s.acc_auto = s.coeff_auto = false;
+    std::string kv;
+    while (in >> kv) {
+        const auto p = kv.find('=');
+        const std::string k = kv.substr(0, p), v = kv.substr(p + 1);
+        if (k == "qi") s.qi = parse_q(v);
+        else if (k == "qcb") s.qcb = parse_q(v);
+        else if (k == "qca") s.qca = parse_q(v);
+        else if (k == "qacc") s.qacc = parse_q(v);
+        else if (k == "qo") s.qo = parse_q(v);
+        else if (k == "auto") s.acc_auto = s.coeff_auto = v == "1";
+        else throw DesignError("unknown key " + k);
+    }
+    return s;
+}
+
+std::string qstr(const QFormat &q) { return "[" + std::to_string(q.WI) + "," + std::to_string(q.WF) + "]"; }
 
 std::string run(const std::string &line) {
     std::istringstream in(line);
@@ -331,6 +370,51 @@ std::string run(const std::string &line) {
         return "{\"win\":" + arr(win) + ",\"X\":" + carr(windowed_fft(xv, win)) + ",\"ssb\":" +
                carr(ssb_spectrum(windowed_fft(xv, win))) + ",\"cgain\":" + num(window_cgain(win)) + ",\"nenbw\":" +
                num(window_nenbw(win)) + "}";
+    }
+    if (cmd == "fixp") {
+        std::string q, o, x;
+        int wi, wf;
+        in >> wi >> wf >> q >> o >> x;
+        Quantizer Q(QFormat{wi, wf, quant_from_key(q), ovfl_from_key(o)});
+        const Vec y = Q.fixp(list(x));
+        return "{\"y\":" + arr(y) + ",\"n_over\":" + std::to_string(Q.overflows()) + "}";
+    }
+    if (cmd == "fxbase") {
+        long long v;
+        int W;
+        in >> v >> W;
+        return "{\"bin\":" + str(to_base(v, W, 2)) + ",\"oct\":" + str(to_base(v, W, 8)) + ",\"hex\":" +
+               str(to_base(v, W, 16)) + ",\"csd\":" + str(to_csd(v, W)) + "}";
+    }
+    if (cmd == "fxfir" || cmd == "fxsos") {
+        std::string c, x;
+        in >> c >> x;
+        const FxSpec s = parse_fx(in);
+        const FxResult r = cmd == "fxfir" ? fx_filter_fir(list(c), s, list(x)) : fx_filter_sos(to_sos(list(c)), s, list(x));
+        return "{\"y\":" + arr(r.y) + ",\"x_q\":" + arr(r.x_q) + ",\"b_q\":" + arr(r.b_q) + ",\"a_q\":" +
+               arr(r.a_q) + ",\"ov\":[" + std::to_string(r.n_over_i) + "," + std::to_string(r.n_over_acc) + "," +
+               std::to_string(r.n_over_o) + "," + std::to_string(r.n_over_coeff) + "]}";
+    }
+    if (cmd == "coe") {
+        int radix;
+        std::string b, q;
+        in >> radix >> b >> q;
+        return "{\"text\":" + str(export_coe(list(b), parse_q(q), radix)) + "}";
+    }
+    if (cmd == "vhdl") {
+        std::string t, c;
+        in >> t >> c;
+        const FxSpec s = parse_fx(in);
+        return "{\"text\":" + str(t == "fir" ? export_vhdl_fir(list(c), s) : export_vhdl_sos(to_sos(list(c)), s)) + "}";
+    }
+    if (cmd == "fxauto") {
+        std::string t, c;
+        in >> t >> c;
+        FxSpec s = parse_fx(in);
+        s.acc_auto = s.coeff_auto = true;
+        const bool fir = t == "fir";
+        update_auto_formats(s, Ba{list(c), {1.0}}, fir ? Sos() : to_sos(list(c)), fir);
+        return "{\"qcb\":" + qstr(s.qcb) + ",\"qca\":" + qstr(s.qca) + ",\"qacc\":" + qstr(s.qacc) + "}";
     }
     throw DesignError("unknown command " + cmd);
 }
