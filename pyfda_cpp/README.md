@@ -202,6 +202,14 @@ se recorta ahí), |H(f)| a lo largo del círculo unidad, el círculo unidad, pol
 (o) con sus tallos y barra de color. Se gira arrastrando con el ratón, se amplía con la
 rueda y doble clic restablece la vista. |H(z)| está comparado con numpy.
 
+## Fase 12: mover polos y ceros con el ratón
+
+Con **Drag P/Z** en la pestaña P / Z se arrastran polos y ceros (en pyfda está como
+pendiente). El filtro pasa a ser un diseño *Manual* que se recalcula en directo; los polos
+y ceros complejos mueven también su pareja conjugada y los reales se quedan en el eje
+real. Ctrl + arrastrar desplaza la vista. `--drag-pz i:re:im` hace lo mismo desde la línea
+de comandos (para las pruebas).
+
 ## Verificación
 
 ```
@@ -233,11 +241,10 @@ Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 `--save-filter f.json`, `--stim sine`, `--formula "sin(2*pi*f1*n)"`, `--stim-file x.csv`, `--tran-export t.csv`, `--fixpoint`,
 `--export-hdl filtro.vhd|.v|.coe`, `--hdl-testbench`, `--data fichero`,
 `--filter`, `--export salida.csv`, `--manual-ba "1,2,1/1,-0.5"`,
-`--manual-zpk "0.5:0.5,0.5:-0.5/0.9/2"`, `--screenshot carpeta`, `--config-dir carpeta`, `--quit`.
+`--manual-zpk "0.5:0.5,0.5:-0.5/0.9/2"`, `--screenshot carpeta`, `--config-dir carpeta`, `--quit`, `--drag-pz 7:0.8:0.3`.
 
 ## Pendiente para siguientes fases
 
-* Edición de polos/ceros arrastrándolos en la gráfica P/Z.
 * Traducciones.
 
 ## Licencias

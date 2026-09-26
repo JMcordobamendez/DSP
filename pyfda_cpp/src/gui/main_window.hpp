@@ -14,6 +14,7 @@ class CoeffsView;
 class TranView;
 class FixpointView;
 class QSplitter;
+class PoleZeroView;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -35,6 +36,7 @@ public:
     TranView *tran() const { return m_tran; }
     FixpointView *fixpoint() const { return m_fix; }
     CoeffsView *coeffs() const { return m_coeffs; }
+    PoleZeroView *poleZero() const { return m_pz; }
     /// Design a "Manual" filter from coefficients / poles and zeros entered by hand
     bool designManual(const pyfda::FilterSpec &manual);
 
@@ -57,6 +59,8 @@ private:
     TranView *m_tran;
     FixpointView *m_fix;
     QSplitter *m_split_main, *m_split_right;
+    PoleZeroView *m_pz;
+    bool m_quiet = false;  // no log messages, e.g. while dragging poles / zeros
     QList<DesignView *> m_views;
     std::unique_ptr<pyfda::FilterDesign> m_design;
 };

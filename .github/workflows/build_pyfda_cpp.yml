@@ -131,6 +131,12 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "complex stimulus failed with exit code $($p.ExitCode)" }
           $l = Get-Content tran_cplx.csv -TotalCount 1
           if ($l -ne 'n,t,x_re,x_im,y_re,y_im') { throw "complex transient export has the header '$l'" }
+          # dragging a pole in the P/Z tab turns the design into a manual filter, the conjugate pole follows
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--config-dir', 'cfg_pz', '--drag-pz', '7:0.8:0.3', '--save-filter', 'drag.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "P/Z drag failed with exit code $($p.ExitCode)" }
+          $d = Get-Content drag.json -Raw | ConvertFrom-Json
+          $moved = @($d.zpk.p | Where-Object { [math]::Abs($_[0] - 0.8) -lt 1e-9 -and [math]::Abs([math]::Abs($_[1]) - 0.3) -lt 1e-9 })
+          if ($d.spec.method -ne 'manual_iir' -or $moved.Count -ne 2) { throw "dragged pole pair not found in drag.json" }
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

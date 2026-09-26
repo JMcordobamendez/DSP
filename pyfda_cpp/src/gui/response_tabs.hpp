@@ -62,9 +62,21 @@ class PoleZeroView : public PlotView {
     Q_OBJECT
 public:
     explicit PoleZeroView(QWidget *parent = nullptr);
+    /// Move pole / zero `index` (zeros first, then poles) to `pos` like a mouse drag
+    void dragTo(int index, QPointF pos, bool finished);
+    void setDragEnabled(bool on);
+
+signals:
+    /// Poles / zeros moved with the mouse: design a "Manual" filter from them
+    void zpkEdited(const pyfda::Zpk &zpk, bool finished);
 
 protected:
     void redraw() override;
+
+private:
+    QCheckBox *m_drag;
+    pyfda::Zpk m_edit;       // poles and zeros while dragging
+    bool m_editing = false;
 };
 
 class ImpulseView : public PlotView {

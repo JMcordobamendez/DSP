@@ -464,6 +464,22 @@ void PlotWidget::paintEvent(QPaintEvent *) {
 }
 
 void PlotWidget::mousePressEvent(QMouseEvent *e) {
+    if (e->button() == Qt::LeftButton && !(e->modifiers() & Qt::ControlModifier) && !m_drag_pts.isEmpty()) {
+        // grab the nearest drag point within 8 pixels
+        double best = 8.0;
+        for (int i = 0; i < m_drag_pts.size(); ++i) {
+            const QPointF d = toPixel(m_drag_pts[i].x(), m_drag_pts[i].y()) - e->position();
+            const double dist = std::hypot(d.x(), d.y());
+            if (dist <= best) {
+                best = dist;
+                m_drag = i;
+            }
+        }
+        if (m_drag >= 0) {
+            setCursor(Qt::ClosedHandCursor);
+            return;
+        }
+    }
     if (e->button() == Qt::LeftButton && plotRect().contains(e->position())) {
         m_rubber = true;
         m_press = m_current = e->position();
@@ -481,6 +497,11 @@ void PlotWidget::mousePressEvent(QMouseEvent *e) {
 void PlotWidget::mouseMoveEvent(QMouseEvent *e) {
     m_mouse = e->position();
     m_mouse_inside = true;
+    if (m_drag >= 0) {
+        emit pointDragged(m_drag, toData(e->position()), false);
+        update();
+        return;
+    }
     if (m_rubber) {
         m_current = e->position();
     } else if (m_panning) {
@@ -497,6 +518,13 @@ void PlotWidget::mouseMoveEvent(QMouseEvent *e) {
 }
 
 void PlotWidget::mouseReleaseEvent(QMouseEvent *e) {
+    if (m_drag >= 0 && e->button() == Qt::LeftButton) {
+        const int i = m_drag;
+        m_drag = -1;
+        unsetCursor();
+        emit pointDragged(i, toData(e->position()), true);
+        return;
+    }
     if (m_rubber && e->button() == Qt::LeftButton) {
         m_rubber = false;
         const QRectF sel = QRectF(m_press, e->position()).normalized();

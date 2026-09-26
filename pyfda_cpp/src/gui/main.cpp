@@ -16,6 +16,7 @@
 //   --manual-ba <b/a>      enter coefficients in the Coeffs tab editor, e.g. "1,2,1/1,-0.5", and apply
 //   --manual-zpk <z/p/k>   enter poles / zeros, e.g. "0.5:0.5,0.5:-0.5/0.9/2" (re:im pairs), and apply
 //   --screenshot <dir>     save a screenshot of every tab and quit
+//   --drag-pz <i:re:im>    move pole / zero i (zeros first, then poles) in the P/Z tab like with the mouse
 //   --config-dir <dir>     directory of the configuration (default: the user's config directory),
 //                          the INI file is <dir>/pyfda/pyfda_cpp.ini
 //   --quit                 close the window right away like the user (saves the session)
@@ -23,6 +24,7 @@
 #include "data_filt_tab.hpp"
 #include "fixpoint_tab.hpp"
 #include "main_window.hpp"
+#include "response_tabs.hpp"
 #include "tran_tab.hpp"
 #include "window_viewer.hpp"
 
@@ -63,8 +65,9 @@ int main(int argc, char *argv[]) {
     QCommandLineOption optManZpk("manual-zpk", "Enter zeros / poles / gain in the P/Z editor and apply, "
                                                "e.g. 0.5:0.5,0.5:-0.5/0.9/2.", "z/p/k");
     QCommandLineOption optConf("config-dir", "Directory of the configuration file.", "dir");
+    QCommandLineOption optDrag("drag-pz", "Move pole / zero i to re + j im in the P/Z tab, e.g. 0:0.5:0.6.", "i:re:im");
     QCommandLineOption optQuit("quit", "Close the main window right away (saves the session).");
-    parser.addOptions({optConf, optQuit, optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp, optFix,
+    parser.addOptions({optConf, optQuit, optDrag, optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp, optFix,
                        optHdl, optTb, optManBa, optManZpk, optFormula, optStimFile});
     parser.process(app);
     if (parser.isSet(optConf))
@@ -103,6 +106,14 @@ int main(int argc, char *argv[]) {
     };
     if (parser.isSet(optManBa) && !manual(parser.value(optManBa), false)) rc = 1;
     if (parser.isSet(optManZpk) && !manual(parser.value(optManZpk), true)) rc = 1;
+    if (parser.isSet(optDrag)) {
+        const QStringList v = parser.value(optDrag).split(':');
+        w.tabs()->setCurrentWidget(w.poleZero());
+        w.poleZero()->setDragEnabled(true);
+        const QPointF pos(v.value(1).toDouble(), v.value(2).toDouble());
+        w.poleZero()->dragTo(v.value(0).toInt(), pos * 0.5, false);  // half way, then to the end point
+        w.poleZero()->dragTo(v.value(0).toInt(), pos, true);
+    }
     if (parser.isSet(optFix)) w.fixpoint()->setSpec(w.fixpoint()->spec(), true);
     if (parser.isSet(optSaveFilt) && !w.saveFilter(parser.value(optSaveFilt))) rc = 1;
     if (parser.isSet(optHdl) && !w.fixpoint()->exportFile(parser.value(optHdl), parser.isSet(optTb))) rc = 1;

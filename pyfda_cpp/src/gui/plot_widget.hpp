@@ -65,11 +65,17 @@ public:
     /// Keep the current zoom when replacing curves (e.g. after refiltering)
     void keepView(bool keep) { m_keep_view = keep; }
     bool savePng(const QString &file);
+    /// Points (data coordinates) that can be moved with the left mouse button, e.g.
+    /// poles and zeros; an empty list disables dragging
+    void setDragPoints(const QVector<QPointF> &pts) { m_drag_pts = pts; }
+    bool isDragging() const { return m_drag >= 0; }
 
     static QColor color(int i);  // default color cycle
 
 signals:
     void viewChanged();
+    /// A drag point was moved to `pos` (data coordinates); `finished` on release
+    void pointDragged(int index, QPointF pos, bool finished);
 
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -105,4 +111,6 @@ private:
     QPointF m_press, m_current, m_mouse;
     double m_px0, m_px1, m_py0, m_py1;
     bool m_mouse_inside = false;
+    QVector<QPointF> m_drag_pts;
+    int m_drag = -1;  // index of the dragged point
 };

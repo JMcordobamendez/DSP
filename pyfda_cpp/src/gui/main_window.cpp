@@ -56,7 +56,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     add(new MagnitudeView(this), "|H(f)|", tr("Magnitude response"));
     add(new PhaseView(this), QString::fromUtf8("φ(f)"), tr("Phase response"));
     add(new GroupDelayView(this), QString::fromUtf8("τ(f)"), tr("Group delay"));
-    add(new PoleZeroView(this), "P / Z", tr("Pole / zero plot"));
+    m_pz = new PoleZeroView(this);
+    add(m_pz, "P / Z", tr("Pole / zero plot, poles and zeros can be moved with the mouse"));
     add(new ThreeDView(this), "3D", tr("3D magnitude response |H(z)|"));
     add(new ImpulseView(this), "h[n]", tr("Impulse and step response"));
     m_tran = new TranView(this);
@@ -129,6 +130,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(m_specs, &SpecPanel::designRequested, this, [this] { design(); });
     connect(m_specs, &SpecPanel::unitsChanged, this, &MainWindow::updateViews);
     connect(m_coeffs, &CoeffsView::manualDesignRequested, this, &MainWindow::designManual);
+    connect(m_pz, &PoleZeroView::zpkEdited, this, [this](const Zpk &zpk, bool finished) {
+        FilterSpec m;
+        m.manual_zpk = zpk;
+        m.manual_from_zpk = true;
+        m_quiet = !finished;  // log only the final design of a drag
+        designManual(m);
+        m_quiet = false;
+    });
     connect(m_specs, &SpecPanel::manualSelected, this, [this] {
         // like pyfda, a manual filter starts with the coefficients of the current design
         if (!m_design) return;
@@ -161,7 +170,7 @@ bool MainWindow::design() {
         m_specs->updateFromDesign(d->spec);
         m_design = std::move(d);
         m_specs->setStatus(QString::fromStdString(m_design->info), false);
-        Logger::info(tr("Designed %1.").arg(QString::fromStdString(m_design->info)));
+        if (!m_quiet) Logger::info(tr("Designed %1.").arg(QString::fromStdString(m_design->info)));
         updateViews();
         return true;
     } catch (const std::exception &e) {

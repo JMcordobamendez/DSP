@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 
 using namespace pyfda;
@@ -177,7 +178,54 @@ void GroupDelayView::redraw() {
 // ---------------------------------------------------------------------------
 PoleZeroView::PoleZeroView(QWidget *parent) : PlotView(parent) {
     m_controls->addWidget(new QLabel(tr("o: zeros, x: poles"), this));
+    m_drag = new QCheckBox(tr("Drag P/Z"), this);
+    m_drag->setToolTip(tr("<span>Move poles and zeros with the mouse. The filter becomes a 'Manual' design, "
+                          "complex poles / zeros keep their complex conjugate partner, real ones stay on the "
+                          "real axis. Ctrl + drag pans the view.</span>"));
+    m_controls->addSpacing(12);
+    m_controls->addWidget(m_drag);
     m_controls->addStretch(1);
+    connect(m_drag, &QCheckBox::toggled, this, [this] { redrawNow(); });
+    connect(m_plot, &PlotWidget::pointDragged, this, &PoleZeroView::dragTo);
+}
+
+void PoleZeroView::setDragEnabled(bool on) { m_drag->setChecked(on); }
+
+void PoleZeroView::dragTo(int index, QPointF pos, bool finished) {
+    if (!m_design) return;
+    if (!m_editing) {  // start of the drag: work on a copy of the current poles and zeros
+        m_edit = m_design->zpk;
+        if (m_design->fir) m_edit.p.clear();  // FIR: poles at the origin are added by the design
+        m_editing = true;
+        m_plot->keepView(true);
+    }
+    const bool zero = index < int(m_edit.z.size());
+    CVec &v = zero ? m_edit.z : m_edit.p;
+    const size_t i = size_t(zero ? index : index - int(m_edit.z.size()));
+    if (i >= v.size()) return;
+    const cplx old = v[i];
+    if (std::fabs(old.imag()) < 1e-10) {
+        v[i] = cplx(pos.x(), 0.0);  // real roots stay on the real axis
+    } else {
+        // complex conjugate partner: the root closest to conj(old)
+        size_t partner = i;
+        double best = std::numeric_limits<double>::infinity();
+        for (size_t k = 0; k < v.size(); ++k)
+            if (k != i && std::abs(v[k] - std::conj(old)) < best) {
+                best = std::abs(v[k] - std::conj(old));
+                partner = k;
+            }
+        cplx n(pos.x(), pos.y());
+        if (std::fabs(n.imag()) < 1e-6) n.imag(old.imag() > 0 ? 1e-6 : -1e-6);  // don't merge on the real axis
+        if ((n.imag() > 0) != (old.imag() > 0)) n.imag(-n.imag());  // stay in the half plane
+        v[i] = n;
+        if (partner != i) v[partner] = std::conj(n);
+    }
+    emit zpkEdited(m_edit, finished);
+    if (finished) {
+        m_editing = false;
+        m_plot->keepView(false);
+    }
 }
 
 void PoleZeroView::redraw() {
@@ -212,6 +260,15 @@ void PoleZeroView::redraw() {
     if (m_design->fir) p.assign(m_design->ba.b.size() - 1, cplx(0.0));  // FIR: poles at the origin
     add(m_design->zpk.z, PlotWidget::Marker::Circle, PlotWidget::color(0), tr("Zeros"));
     add(p, PlotWidget::Marker::Cross, PlotWidget::color(3), tr("Poles"));
+    // drag points: zeros, then poles (not the fixed poles at the origin of FIR filters)
+    QVector<QPointF> drag;
+    if (m_drag->isChecked()) {
+        const Zpk &src = m_editing ? m_edit : m_design->zpk;
+        for (const cplx &x : src.z) drag << QPointF(x.real(), x.imag());
+        if (!m_design->fir || m_editing)
+            for (const cplx &x : src.p) drag << QPointF(x.real(), x.imag());
+    }
+    m_plot->setDragPoints(drag);
     double pmax = 0;
     for (const cplx &x : m_design->zpk.p) pmax = std::max(pmax, std::abs(x));
     m_plot->setTitle(m_design->fir ? tr("Pole / zero plot") :

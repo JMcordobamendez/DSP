@@ -357,7 +357,8 @@ void SpecPanel::updateVisibility() {
     if (m == DesignMethod::Delay) m_hint->setText(tr("<i>N</i> delays, H(z) = z<sup>-N</sup>."));
     else if (manual)
         m_hint->setText(tr("Enter the coefficients or poles / zeros in the <b>Coeffs</b> tab "
-                           "(<i>Edit</i>) and press <i>Apply</i>. DESIGN FILTER keeps them."));
+                           "(<i>Edit</i>) and press <i>Apply</i>, or drag poles / zeros in the <b>P / Z</b> "
+                           "tab. DESIGN FILTER keeps them."));
     else if (ma)
         m_hint->setText(min && !two ? tr("Minimum number of delays M for the stop band specs F_SB, A_SB.")
                                     : tr("Order N = M delays per stage x stages."));
