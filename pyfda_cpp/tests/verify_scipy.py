@@ -837,6 +837,61 @@ for spec in ("rt=BP method=ma fo=manual N=8 stages=2 norm=0", "method=delay N=7"
           f"{r2} != {r}"[:300])
 os.remove("_rt.json")
 
+# ---- formula stimulus (numexpr syntax like pyfda's "Formula" stimulus) ----
+try:
+    import numexpr
+except ImportError:
+    numexpr = None
+formulas = [
+    "A1 * abs(sin(2 * pi * f1 * n))",
+    "A1 * sin(2*pi*f1*n + phi1/180*pi) + A2 * cos(2*pi*f2*n)",
+    "where(n < T1, 0, A1) - 0.5 * (n % 7 > 3)",
+    "exp(-n / 20.) * cos(2 * pi * f1 * n) ** 2",
+    "-2 ** 2 + n * 0 + sqrt(abs(sin(n))) * sign(cos(n))",
+    "arctan2(sin(n), cos(n)) / pi + log1p(n) - log10(n + 1) + tanh(n / 10 - 3)",
+    "(n > 5) & (n < 20) | (n == 40)",
+    "t * f_S - n + minimum(n, 10) + maximum(n, 30) + floor(n / 3) + ceil(n / 4)",
+    "e ** (-(n - T2) ** 2 / (2 * BW1 ** 2)) * N1",
+    "2.5e-1 * n - 1E1 + .5",
+]
+pars = dict(A1=0.7, A2=0.3, f1=0.03, f2=0.11, phi1=30.0, phi2=0.0, T1=12.0, T2=25.0, N1=5, BW1=3.0, BW2=0.5)
+for fo in formulas:
+    r = call(f"stim 64 a1={pars['A1']} a2={pars['A2']} f1={pars['f1']} f2={pars['f2']} phi1={pars['phi1']} "
+             f"t1={pars['T1']} t2={pars['T2']} n1={pars['N1']} bw1={pars['BW1']} fs=8 formula={fo}")
+    n = np.arange(64, dtype=float)
+    ld = dict(pars, n=n, t=n / 8, f_S=8.0, pi=np.pi, e=np.e)
+    if numexpr is not None:
+        ref = numexpr.evaluate(fo, local_dict=ld).astype(float)
+    else:
+        ref = eval(fo.replace("arctan2", "np.arctan2"), {k: getattr(np, k) for k in dir(np)}, ld)
+    close(f"formula {fo}", r['x'], np.broadcast_to(ref, n.shape), 1e-12, 1e-14)
+for bad in ("sin(n", "foo(n)", "n +* 2", "q * 2", "3 * j", ""):
+    r = call(f"stim 8 formula={bad}")
+    check(f"formula error '{bad}'", 'error' in r, str(r)[:100])
+
+# ---- spectrogram (scipy.signal.spectrogram, detrend='constant', one-sided) ----
+xs = np.sin(2 * np.pi * 0.05 * np.arange(700) ** 1.3 / 30) + 0.2 * rng.normal(size=700) + 0.3
+for mode in ("psd", "magnitude", "angle"):
+    for dens in (1, 0):
+        for wname, par, nper, novl in (("hann", 0, 64, 32), ("kaiser", 6.0, 101, 50), ("rectangular", 0, 128, 0)):
+            if mode != "psd" and dens == 0:
+                continue
+            win = sig.get_window(('kaiser', par) if wname == 'kaiser' else ('boxcar' if wname == 'rectangular' else wname),
+                                 nper, fftbins=True)
+            f, t, S = sig.spectrogram(xs, 2.0, window=win, nperseg=nper, noverlap=novl, detrend='constant',
+                                      scaling='density' if dens else 'spectrum', mode=mode)
+            r = call(f"spgr {mode} {dens} 2 {wname} {par} {nper} {novl} {L(xs)}")
+            name = f"spectrogram {mode} dens={dens} {wname} {nper}/{novl}"
+            close(name + " f", r['f'], f, 1e-12)
+            close(name + " t", r['t'], t, 1e-12)
+            got = np.array(r['s']).T
+            if mode == "angle":  # compare angles where the magnitude is not tiny
+                _, _, M = sig.spectrogram(xs, 2.0, window=win, nperseg=nper, noverlap=novl, mode='magnitude')
+                m = M > 1e-6 * M.max()
+                check(name, got.shape == S.shape and np.allclose(np.exp(1j * got[m]), np.exp(1j * S[m]), atol=1e-8))
+            else:
+                close(name, got, S, 1e-9)
+
 proc.stdin.close()
 proc.wait()
 print(f"{n_pass} checks passed, {n_fail} failed")

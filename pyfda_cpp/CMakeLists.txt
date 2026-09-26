@@ -28,6 +28,7 @@ add_library(pyfda_core STATIC
     src/core/remez.cpp
     src/core/special.cpp
     src/core/stimulus.cpp
+    src/core/expr.cpp
 )
 target_include_directories(pyfda_core PUBLIC src/core)
 

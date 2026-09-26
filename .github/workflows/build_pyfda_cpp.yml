@@ -110,6 +110,10 @@ jobs:
           $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/lowpass_50Hz.json', '--export-hdl', 'lowpass.v', '--hdl-testbench' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Verilog export failed with exit code $($p.ExitCode)" }
           if (-not (Select-String -Path lowpass_tb.v -Pattern 'module lowpass_tb' -Quiet)) { throw "Verilog testbench was not written" }
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/lowpass_50Hz.json', '--formula', 'A1*sin(2*pi*(5+200*t)*t)', '--tran-export', 'tran_formula.csv' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "formula stimulus failed with exit code $($p.ExitCode)" }
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/lowpass_50Hz.json', '--stim-file', 'tran.csv', '--tran-export', 'tran_file.csv' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "file stimulus failed with exit code $($p.ExitCode)" }
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

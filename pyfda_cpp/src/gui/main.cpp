@@ -7,6 +7,8 @@
 //   --filter               filter the loaded data with the default design
 //   --export <file.csv>    export original and filtered data
 //   --stim <name>          stimulus of the transient analysis (dirac, step, sine, ...)
+//   --formula <expr>       formula stimulus (numexpr syntax), e.g. "sin(2*pi*f1*n)"
+//   --stim-file <file>     data file as stimulus
 //   --tran-export <file>   export stimulus and response of the transient analysis
 //   --fixpoint             fixpoint simulation in the transient analysis
 //   --export-hdl <file>    export the fixpoint filter (.vhd, .v or .coe)
@@ -43,6 +45,8 @@ int main(int argc, char *argv[]) {
     QCommandLineOption optLoadFilt("load-filter", "Load a filter file (JSON).", "file");
     QCommandLineOption optSaveFilt("save-filter", "Save the design as filter file (JSON) and quit.", "file");
     QCommandLineOption optStim("stim", "Stimulus of the transient analysis.", "name");
+    QCommandLineOption optFormula("formula", "Formula stimulus of the transient analysis.", "expr");
+    QCommandLineOption optStimFile("stim-file", "Data file as stimulus of the transient analysis.", "file");
     QCommandLineOption optTranExp("tran-export", "Export the transient stimulus and response as CSV.", "file");
     QCommandLineOption optFix("fixpoint", "Fixpoint simulation in the transient analysis.");
     QCommandLineOption optHdl("export-hdl", "Export the fixpoint filter as VHDL (.vhd), Verilog (.v) or COE (.coe) and quit.",
@@ -52,7 +56,7 @@ int main(int argc, char *argv[]) {
     QCommandLineOption optManZpk("manual-zpk", "Enter zeros / poles / gain in the P/Z editor and apply, "
                                                "e.g. 0.5:0.5,0.5:-0.5/0.9/2.", "z/p/k");
     parser.addOptions({optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp, optFix,
-                       optHdl, optTb, optManBa, optManZpk});
+                       optHdl, optTb, optManBa, optManZpk, optFormula, optStimFile});
     parser.process(app);
 
     MainWindow w;
@@ -101,6 +105,8 @@ int main(int argc, char *argv[]) {
         if (found) w.tran()->setParams(p);
         else rc = 1;
     }
+    if (parser.isSet(optFormula)) w.tran()->setFormula(parser.value(optFormula));
+    if (parser.isSet(optStimFile) && !w.tran()->loadStimFile(parser.value(optStimFile))) rc = 1;
     if (parser.isSet(optTranExp) && !w.tran()->saveCsv(parser.value(optTranExp))) rc = 1;
     if (parser.isSet(optData) && !w.dataFilt()->loadFile(parser.value(optData))) rc = 1;
     if (parser.isSet(optFilter)) w.dataFilt()->filterData();
@@ -112,10 +118,13 @@ int main(int argc, char *argv[]) {
             w.tabs()->setCurrentIndex(i);
             app.processEvents();
             w.grab().save(QString("%1/tab%2.png").arg(dir).arg(i));
-            if (w.tabs()->currentWidget() == w.tran()) {  // frequency domain of the transient analysis
-                w.tran()->innerTabs()->setCurrentIndex(1);
-                app.processEvents();
-                w.grab().save(QString("%1/tab%2_freq.png").arg(dir).arg(i));
+            if (w.tabs()->currentWidget() == w.tran()) {  // frequency domain and spectrogram
+                const char *names[] = {"", "freq", "spgr"};
+                for (int k = 1; k < 3; ++k) {
+                    w.tran()->innerTabs()->setCurrentIndex(k);
+                    app.processEvents();
+                    w.grab().save(QString("%1/tab%2_%3.png").arg(dir).arg(i).arg(names[k]));
+                }
                 w.tran()->innerTabs()->setCurrentIndex(0);
             }
         }

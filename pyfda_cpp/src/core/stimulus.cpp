@@ -1,5 +1,7 @@
 #include "stimulus.hpp"
 
+#include "expr.hpp"
+
 #include "filtering.hpp"
 #include "special.hpp"
 
@@ -31,6 +33,8 @@ const std::vector<StimInfo> &stim_list() {
         {Stim::AM, "am", "AM", "a1 a2 phi1 phi2 f1 f2 dc"},
         {Stim::PMFM, "pmfm", "PM / FM", "a1 a2 phi1 phi2 f1 f2 dc"},
         {Stim::PWM, "pwm", "PWM", "a1 a2 phi1 phi2 f1 f2 bl dc"},
+        {Stim::Formula, "formula", "Formula", "a1 a2 phi1 phi2 f1 f2 t1 t2 bw1 bw2 n1 dc"},
+        {Stim::File, "file", "File", "a1 dc"},
     };
     return l;
 }
@@ -325,6 +329,17 @@ Vec calc_stimulus(const StimParams &p, int n_end) {
         }
         break;
     }
+    case Stim::Formula:
+        // same names as in pyfda (phi in degrees, times in samples)
+        x = eval_formula(p.formula, n_end, p.f_s,
+                         {{"A1", p.a1}, {"A2", p.a2}, {"f1", p.f1}, {"f2", p.f2}, {"phi1", p.phi1},
+                          {"phi2", p.phi2}, {"T1", p.t1}, {"T2", p.t2}, {"N1", p.n1}, {"BW1", p.bw1},
+                          {"BW2", p.bw2}, {"f_S", p.f_s}, {"pi", PI}, {"e", std::exp(1.0)}});
+        break;
+    case Stim::File:
+        if (!p.x_file || p.x_file->empty()) throw DesignError("No data file loaded for the stimulus.");
+        for (int n = 0; n < n_end && size_t(n) < p.x_file->size(); ++n) x[size_t(n)] = p.a1 * (*p.x_file)[size_t(n)];
+        break;
     }
 
     // --- noise
@@ -395,6 +410,8 @@ std::string stim_title(const StimParams &p, bool step_error) {
     case Stim::AM: t = "AM Stimulus"; break;
     case Stim::PMFM: t = "PM / FM Stimulus"; break;
     case Stim::PWM: t = "PWM Stimulus"; break;
+    case Stim::Formula: t = "Formula Defined Stimulus"; break;
+    case Stim::File: t = "Stimulus from File"; break;
     }
     switch (p.noise) {
     case Noise::None: break;
@@ -450,6 +467,52 @@ CVec ssb_spectrum(const CVec &X) {
     s.push_back(X[0]);
     for (size_t k = 1; k < N / 2; ++k) s.push_back(X[k] * 2.0);
     return s;
+}
+
+Spectrogram spectrogram(const Vec &x, double fs, const Vec &win, int noverlap, SpgrMode mode, bool density) {
+    const int nperseg = int(win.size());
+    if (nperseg < 1) throw DesignError("Spectrogram: NFFT must be >= 1.");
+    if (noverlap < 0 || noverlap >= nperseg) throw DesignError("Spectrogram: 0 <= N_overlap < NFFT is required.");
+    if (int(x.size()) < nperseg) throw DesignError("Spectrogram: NFFT is larger than the number of data points.");
+    const int step = nperseg - noverlap;
+    const int n_seg = (int(x.size()) - noverlap) / step;
+    double s1 = 0, s2 = 0;
+    for (double w : win) {
+        s1 += w;
+        s2 += w * w;
+    }
+    double scale = density ? 1.0 / (fs * s2) : 1.0 / (s1 * s1);
+    if (mode != SpgrMode::PSD) scale = std::sqrt(scale);
+    const int n_bins = nperseg / 2 + 1;
+    Spectrogram r;
+    for (int k = 0; k < n_bins; ++k) r.f.push_back(k * fs / nperseg);
+    for (int m = 0; m < n_seg; ++m) {
+        const size_t off = size_t(m) * size_t(step);
+        double mean = 0;
+        for (int k = 0; k < nperseg; ++k) mean += x[off + size_t(k)];
+        mean /= nperseg;
+        CVec seg(static_cast<size_t>(nperseg));
+        for (int k = 0; k < nperseg; ++k) seg[size_t(k)] = (x[off + size_t(k)] - mean) * win[size_t(k)];
+        const CVec X = fft(seg);
+        Vec row(static_cast<size_t>(n_bins));
+        for (int k = 0; k < n_bins; ++k) {
+            const cplx v = X[size_t(k)] * (mode == SpgrMode::PSD ? 1.0 : scale);
+            switch (mode) {
+            case SpgrMode::PSD: {
+                double p = std::norm(X[size_t(k)]) * scale;
+                const bool edge = k == 0 || (nperseg % 2 == 0 && k == n_bins - 1);
+                if (!edge) p *= 2;
+                row[size_t(k)] = p;
+                break;
+            }
+            case SpgrMode::Magnitude: row[size_t(k)] = std::abs(v); break;
+            case SpgrMode::Angle: row[size_t(k)] = std::arg(v); break;
+            }
+        }
+        r.s.push_back(row);
+        r.t.push_back((nperseg / 2.0 + double(off)) / fs);
+    }
+    return r;
 }
 
 }  // namespace pyfda

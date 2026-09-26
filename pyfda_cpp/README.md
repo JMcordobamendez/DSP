@@ -117,6 +117,20 @@ pyfda usa `N` como número de coeficientes en el método de ventana.
   pestaña Fixpoint junto a hex/bin/oct/CSD. pyfda solo tiene las estructuras FIR en
   forma directa e IIR DF1, las dos portadas.
 
+## Fase 6: fórmula, fichero y espectrograma en y[n]
+
+* Estímulo **Formula** como en pyfda (sintaxis de numexpr): índice `n`, tiempo `t = n / f_S`,
+  parámetros A1, A2, f1, f2, phi1, phi2, T1, T2, N1, BW1, BW2, f_S, pi, e, operadores
+  aritméticos, comparaciones y `& | ~`, y funciones (`sin`, `exp`, `where`, ...). Un
+  evaluador propio en C++ sustituye a numexpr; los tests lo comparan con numexpr.
+  Solo valores reales (pyfda también admite `j`).
+* Estímulo **File**: carga CSV/texto, wav o npy (primera columna de datos que no sea el
+  tiempo), normalizado opcionalmente a max |x| = 1 y escalado por A1. Con N = auto se usa
+  la longitud del fichero.
+* Pestaña **Spectrogram** (port de `scipy.signal.spectrogram`: PSD, magnitud o fase, en dB
+  o lineal, NFFT y solapamiento, ventana de la pestaña Frequency), de x[n] o y[n], con
+  barra de color. Comparado con scipy.
+
 ## Verificación
 
 ```
@@ -145,15 +159,14 @@ pasa los tests contra scipy y sube `pyfda_cpp.exe` con las DLL de Qt como artefa
 `pyfda_cpp_win`.
 
 Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
-`--save-filter f.json`, `--stim sine`, `--tran-export t.csv`, `--fixpoint`,
+`--save-filter f.json`, `--stim sine`, `--formula "sin(2*pi*f1*n)"`, `--stim-file x.csv`, `--tran-export t.csv`, `--fixpoint`,
 `--export-hdl filtro.vhd|.v|.coe`, `--hdl-testbench`, `--data fichero`,
 `--filter`, `--export salida.csv`, `--manual-ba "1,2,1/1,-0.5"`,
 `--manual-zpk "0.5:0.5,0.5:-0.5/0.9/2"`, `--screenshot carpeta`.
 
 ## Pendiente para siguientes fases
 
-* En el análisis transitorio: estímulos complejos (exp), fórmula libre, espectrograma,
-  datos de fichero como estímulo y condiciones iniciales. Gráfica 3D.
+* En el análisis transitorio: estímulos complejos (exp, `j` en fórmulas). Gráfica 3D.
 * Edición de polos/ceros arrastrándolos en la gráfica P/Z.
 * Visor de ventanas FFT y el resto de ventanas de pyfda, más unidades (f_Ny, k),
   especificaciones de amplitud en V/W, pestaña de información, fichero de configuración

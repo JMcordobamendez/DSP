@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QColor>
+#include <QImage>
 #include <QPointF>
 #include <QString>
 #include <QVector>
@@ -45,6 +46,12 @@ public:
     void addRegion(const Region &r) { m_regions.append(r); }
     void addLabel(const Label &l) { m_labels.append(l); }
     void addCircle(double cx, double cy, double r, const QColor &color);  // drawn as a curve
+    /// Image in data coordinates (e.g. spectrogram), row 0 at y1, with a color bar
+    /// for the values zlo ... zhi
+    void setImage(const QImage &img, double x0, double x1, double y0, double y1, double zlo, double zhi,
+                  const QString &zlabel);
+    /// Viridis like color map, t = 0 ... 1
+    static QRgb colormap(double t);
     void setTitle(const QString &t) { m_title = t; }
     void setXLabel(const QString &t) { m_xlabel = t; }
     void setYLabel(const QString &t) { m_ylabel = t; }
@@ -84,6 +91,9 @@ private:
     QVector<Curve> m_curves;
     QVector<Region> m_regions;
     QVector<Label> m_labels;
+    QImage m_image;
+    double m_ix0 = 0, m_ix1 = 1, m_iy0 = 0, m_iy1 = 1, m_zlo = 0, m_zhi = 1;
+    QString m_zlabel;
     QString m_title, m_xlabel, m_ylabel, m_message;
     bool m_equal = false;
     bool m_keep_view = false;

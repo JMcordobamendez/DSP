@@ -1,6 +1,7 @@
 #include "tran_tab.hpp"
 
 #include "conversions.hpp"
+#include "data_io.hpp"
 #include "filtering.hpp"
 #include "logger.hpp"
 #include "plot_widget.hpp"
@@ -127,6 +128,34 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     lay->addLayout(r2);
     lay->addLayout(r3);
 
+    // formula (pyfda: numexpr syntax) and file stimulus
+    m_wdg_formula = new QWidget(this);
+    auto *hf = new QHBoxLayout(m_wdg_formula);
+    hf->setContentsMargins(0, 0, 0, 0);
+    m_formula = new QLineEdit(QString::fromStdString(m_p.formula), this);
+    m_formula->setToolTip(tr("<span>Formula in numexpr syntax with the index <i>n</i>, the time <i>t</i> = n / f_S, "
+                             "the parameters A1, A2, f1, f2, phi1, phi2 (degrees), T1, T2, N1, BW1, BW2 (normalized "
+                             "frequencies, times in samples), f_S, pi, e and the functions sin, cos, tan, arcsin, "
+                             "arccos, arctan, arctan2, sinh, cosh, tanh, exp, log, log10, sqrt, abs, sign, floor, "
+                             "ceil, round, where, minimum, maximum. Operators: + - * / % **, comparisons, &amp; | ~"
+                             "</span>"));
+    hf->addWidget(new QLabel("x[n] =", this));
+    hf->addWidget(m_formula, 1);
+    lay->addWidget(m_wdg_formula);
+    m_wdg_file = new QWidget(this);
+    auto *hl = new QHBoxLayout(m_wdg_file);
+    hl->setContentsMargins(0, 0, 0, 0);
+    m_load = new QPushButton(tr("Load file ..."), this);
+    m_load->setToolTip(tr("Load the stimulus from a CSV / text, wav or npy file (first data column)"));
+    m_file_lbl = new QLabel(tr("no file loaded"), this);
+    m_file_norm = new QCheckBox(tr("Normalize"), this);
+    m_file_norm->setChecked(true);
+    m_file_norm->setToolTip(tr("Normalize the file data to max |x| = 1 (A1 scales the data)"));
+    hl->addWidget(m_load);
+    hl->addWidget(m_file_lbl, 1);
+    hl->addWidget(m_file_norm);
+    lay->addWidget(m_wdg_file);
+
     // --- row 4: number of points, export
     auto *r4 = new QHBoxLayout();
     m_N = new QSpinBox(this);
@@ -208,6 +237,41 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     m_plot_f = new PlotWidget(this);
     vf->addWidget(m_plot_f, 1);
     m_tabs->addTab(wf, tr("Frequency"));
+
+    // spectrogram (pyfda: time tab, scipy.signal.spectrogram)
+    auto *ws = new QWidget(this);
+    auto *vs = new QVBoxLayout(ws);
+    vs->setContentsMargins(2, 2, 2, 2);
+    auto *cs = new QHBoxLayout();
+    m_s_sig = new QComboBox(this);
+    m_s_sig->addItems({"y[n]", "x[n]"});
+    m_s_mode = new QComboBox(this);
+    m_s_mode->addItems({"PSD", tr("Magnitude"), tr("Phase")});
+    m_s_mode->setToolTip(tr("Power spectral density, magnitude or phase of the short time Fourier transform"));
+    m_s_db = new QCheckBox("dB", this);
+    m_s_db->setChecked(true);
+    m_s_nfft = new QSpinBox(this);
+    m_s_nfft->setRange(4, 1 << 20);
+    m_s_nfft->setValue(256);
+    m_s_nfft->setToolTip(tr("Number of points per segment (the window of the Frequency tab is used)"));
+    m_s_ovlp = new QSpinBox(this);
+    m_s_ovlp->setRange(0, 1 << 20);
+    m_s_ovlp->setValue(128);
+    m_s_ovlp->setToolTip(tr("Number of overlapping points between segments"));
+    cs->addWidget(new QLabel(tr("Signal:"), this));
+    cs->addWidget(m_s_sig);
+    cs->addWidget(m_s_mode);
+    cs->addWidget(m_s_db);
+    cs->addSpacing(12);
+    cs->addWidget(new QLabel("NFFT =", this));
+    cs->addWidget(m_s_nfft);
+    cs->addWidget(new QLabel("N_OVLP =", this));
+    cs->addWidget(m_s_ovlp);
+    cs->addStretch(1);
+    vs->addLayout(cs);
+    m_plot_s = new PlotWidget(this);
+    vs->addWidget(m_plot_s, 1);
+    m_tabs->addTab(ws, tr("Spectrogram"));
     lay->addWidget(m_tabs, 1);
     m_info = new QLabel(this);
     m_info->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -256,6 +320,32 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
         redrawNow();
     });
     connect(m_win_par, &QLineEdit::editingFinished, this, [this] { redrawNow(); });
+    for (QComboBox *c : {m_s_sig, m_s_mode})
+        connect(c, &QComboBox::currentIndexChanged, this, [this] {
+            m_s_db->setEnabled(m_s_mode->currentIndex() != 2);
+            m_plot_s->keepView(false);
+            redrawNow();
+        });
+    connect(m_s_db, &QCheckBox::toggled, this, [this] { redrawNow(); });
+    for (QSpinBox *b : {m_s_nfft, m_s_ovlp})
+        connect(b, &QSpinBox::valueChanged, this, [this] {
+            m_plot_s->keepView(false);
+            redrawNow();
+        });
+    connect(m_formula, &QLineEdit::editingFinished, this, [this] {
+        if (m_p.formula == m_formula->text().toStdString()) return;
+        m_p.formula = m_formula->text().toStdString();
+        changed();
+    });
+    connect(m_load, &QPushButton::clicked, this, [this] {
+        const QString fn = QFileDialog::getOpenFileName(this, tr("Load stimulus"), QString(),
+                                                        tr("Data files (*.csv *.txt *.dat *.wav *.npy);;All files (*)"));
+        if (!fn.isEmpty()) loadStimFile(fn);
+    });
+    connect(m_file_norm, &QCheckBox::toggled, this, [this] {
+        applyFileNorm();
+        changed();
+    });
     connect(exp, &QPushButton::clicked, this, [this] {
         QString fn = QFileDialog::getSaveFileName(this, tr("Export transient data"), QString(), tr("CSV (*.csv)"));
         if (fn.isEmpty()) return;
@@ -280,6 +370,71 @@ void TranView::setParams(const StimParams &p) {
     changed();
 }
 
+bool TranView::loadStimFile(const QString &file_name) {
+    DataTable t;
+    try {
+        t = load_data_file(QFile::encodeName(file_name).toStdString());
+    } catch (const std::exception &e) {
+        Logger::error(tr("Couldn't load '%1':\n%2").arg(file_name, e.what()));
+        return false;
+    }
+    // first column with numbers that is not a time / index axis (e.g. n, t, x, y)
+    int col = -1;
+    for (size_t c = 0; c < t.n_cols && col < 0; ++c) {
+        if (c + 1 < t.n_cols && is_time_column(t, c)) continue;
+        for (size_t r = 0; r < t.n_rows; ++r)
+            if (std::isfinite(t.at(r, c))) {
+                col = int(c);
+                break;
+            }
+    }
+    if (col < 0) {
+        Logger::error(tr("'%1' contains no numeric data.").arg(file_name));
+        return false;
+    }
+    m_file_raw = t.column(size_t(col));
+    for (double &v : m_file_raw)
+        if (!std::isfinite(v)) v = 0;  // empty / non-numeric cells
+    m_p.file_name = QFileInfo(file_name).fileName().toStdString();
+    m_file_lbl->setText(tr("%1: %2 samples, column '%3'")
+                            .arg(QFileInfo(file_name).fileName())
+                            .arg(m_file_raw.size())
+                            .arg(QString::fromStdString(t.names[size_t(col)])));
+    m_file_lbl->setToolTip(file_name);
+    Logger::info(tr("Loaded %1 samples from '%2' as stimulus.").arg(m_file_raw.size()).arg(file_name));
+    applyFileNorm();
+    m_p.stim = Stim::File;
+    m_stim->blockSignals(true);
+    m_stim->setCurrentIndex(m_stim->findData(int(Stim::File)));
+    m_stim->blockSignals(false);
+    updateVisibility();
+    changed();
+    return true;
+}
+
+void TranView::applyFileNorm() {
+    if (m_file_raw.empty()) return;
+    auto x = std::make_shared<Vec>(m_file_raw);
+    if (m_file_norm->isChecked()) {
+        double mx = 0;
+        for (double v : *x) mx = std::max(mx, std::fabs(v));
+        if (mx > 0)
+            for (double &v : *x) v /= mx;
+    }
+    m_p.x_file = x;
+}
+
+void TranView::setFormula(const QString &formula) {
+    m_formula->setText(formula);
+    m_p.formula = formula.toStdString();
+    m_p.stim = Stim::Formula;
+    m_stim->blockSignals(true);
+    m_stim->setCurrentIndex(m_stim->findData(int(Stim::Formula)));
+    m_stim->blockSignals(false);
+    updateVisibility();
+    changed();
+}
+
 void TranView::setFixpoint(const FxSpec &spec, bool on) {
     m_fx = spec;
     m_fx_on = on;
@@ -290,6 +445,8 @@ void TranView::updateVisibility() {
     for (auto it = m_param_widgets.begin(); it != m_param_widgets.end(); ++it)
         it.value()->setVisible(stim_uses(m_p.stim, it.key().toStdString()));
     m_chirp->setVisible(m_p.stim == Stim::Chirp);
+    m_wdg_formula->setVisible(m_p.stim == Stim::Formula);
+    m_wdg_file->setVisible(m_p.stim == Stim::File);
     m_bl->setVisible(stim_uses(m_p.stim, "bl"));
     m_step_err->setVisible(m_p.stim == Stim::Step);
     m_noi->setVisible(m_p.noise != Noise::None);
@@ -391,13 +548,17 @@ void TranView::calc() {
     if (!m_design) return;
     int N = m_N->value();
     if (N == 0) N = std::max(100, m_design->fir ? int(m_design->ba.b.size()) + 5 : impz_len(m_design->zpk));
+    if (m_N->value() == 0 && m_p.stim == Stim::File && m_p.x_file) N = std::max(1, int(m_p.x_file->size()));
     m_n_start = m_N_start->value();
     const int n_end = m_n_start + N;
+    m_p.f_s = m_ctx.f_s;
+    m_formula->setStyleSheet(QString());
     try {
         m_x = calc_stimulus(m_p, n_end);
     } catch (const std::exception &e) {
         m_error = e.what();
         Logger::warning(m_error);
+        if (m_p.stim == Stim::Formula) m_formula->setStyleSheet("QLineEdit {background: #ffd0d0}");
         m_x.clear();
         return;
     }
@@ -438,6 +599,77 @@ void TranView::redraw() {
     if (m_dirty) calc();
     drawTime();
     drawFreq();
+    drawSpgr();
+}
+
+void TranView::drawSpgr() {
+    m_plot_s->clear();
+    m_plot_s->setXLabel(m_ctx.t_label);
+    m_plot_s->setYLabel(m_ctx.f_label);
+    if (m_x.empty()) {
+        m_plot_s->setMessage(m_error.isEmpty() ? tr("No filter designed") : m_error);
+        m_plot_s->autoscale();
+        return;
+    }
+    const bool use_y = m_s_sig->currentIndex() == 0;
+    const Vec s(use_y ? m_y.begin() + m_n_start : m_x.begin() + m_n_start, use_y ? m_y.end() : m_x.end());
+    const int N = int(s.size());
+    int nfft = m_s_nfft->value(), novl = m_s_ovlp->value();
+    // like pyfda: NFFT <= N and N_OVLP < NFFT
+    if (nfft > N) nfft = N;
+    if (novl >= nfft) novl = 0;
+    const auto &wi = window_list()[m_win->currentIndex()];
+    double par = wi.par_default;
+    if (wi.par_name && !parse(m_win_par, par)) par = wi.par_default;
+    const int mode_i = m_s_mode->currentIndex();
+    const SpgrMode mode = mode_i == 0 ? SpgrMode::PSD : mode_i == 1 ? SpgrMode::Magnitude : SpgrMode::Angle;
+    Spectrogram sp;
+    try {
+        sp = spectrogram(s, m_ctx.f_s, fft_window(wi.type, nfft, par), novl, mode, true);
+    } catch (const std::exception &e) {
+        m_plot_s->setMessage(e.what());
+        m_plot_s->autoscale();
+        return;
+    }
+    const bool log = m_s_db->isChecked() && mode != SpgrMode::Angle;
+    const double db_scale = mode == SpgrMode::PSD ? 10 : 20;
+    const int nt = int(sp.t.size()), nf = int(sp.f.size());
+    std::vector<double> z(size_t(nt) * size_t(nf));
+    double zmax = -std::numeric_limits<double>::infinity(), zmin = -zmax;
+    for (int i = 0; i < nt; ++i)
+        for (int k = 0; k < nf; ++k) {
+            double v = sp.s[size_t(i)][size_t(k)];
+            if (log) v = db_scale * std::log10(std::max(std::fabs(v), 1e-300));
+            z[size_t(i) * size_t(nf) + size_t(k)] = v;
+            if (std::isfinite(v)) {
+                zmax = std::max(zmax, v);
+                zmin = std::min(zmin, v);
+            }
+        }
+    if (log) zmin = std::max(zmin, zmax - 120);  // 120 dB dynamic range like the other plots
+    if (mode == SpgrMode::Angle) {
+        zmin = -PI;
+        zmax = PI;
+    }
+    if (!(zmax > zmin)) zmax = zmin + 1;
+    QImage img(nt, nf, QImage::Format_RGB32);
+    for (int i = 0; i < nt; ++i)
+        for (int k = 0; k < nf; ++k)
+            img.setPixel(i, nf - 1 - k, PlotWidget::colormap((z[size_t(i) * size_t(nf) + size_t(k)] - zmin) / (zmax - zmin)));
+    // pixel edges: segments are spaced by (nfft - novl) / f_S, bins by f_S / nfft
+    const double t_scale = m_ctx.unit_to_hz == 0 ? m_ctx.f_s : 1.0;  // normalized: time in samples
+    const double dt = (nfft - novl) / m_ctx.f_s * t_scale, df = m_ctx.f_s / nfft;
+    const double t0 = (sp.t.front() + m_n_start / m_ctx.f_s) * t_scale;
+    const QString sym = use_y ? "Y" : "X";
+    const QString zl = mode == SpgrMode::PSD ? QString("S_%1%1 / %2").arg(sym.toLower(), log ? "dB re W/Hz" : "W/Hz")
+                       : mode == SpgrMode::Magnitude ? QString("|%1| / %2").arg(sym, log ? "dBV" : "V")
+                                                     : QString::fromUtf8("∠%1 / rad").arg(sym);
+    m_plot_s->setImage(img, t0 - dt / 2, t0 + (nt - 0.5) * dt, -df / 2, (nf - 0.5) * df, zmin, zmax, zl);
+    m_plot_s->setTitle(tr("Spectrogram of %1, %2 window, NFFT = %3, N_OVLP = %4")
+                           .arg(use_y ? "y[n]" : "x[n]", wi.name)
+                           .arg(nfft)
+                           .arg(novl));
+    m_plot_s->autoscale();
 }
 
 void TranView::drawTime() {

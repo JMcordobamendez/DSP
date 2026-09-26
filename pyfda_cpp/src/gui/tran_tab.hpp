@@ -14,6 +14,7 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QPushButton;
 class QSpinBox;
 class QTabWidget;
 
@@ -30,6 +31,10 @@ public:
     const pyfda::Vec &response() const { return m_y; }
     bool saveCsv(const QString &file_name);
     QTabWidget *innerTabs() const { return m_tabs; }
+    /// Load a data file (CSV, wav, npy ...) as stimulus and select the "File" stimulus
+    bool loadStimFile(const QString &file_name);
+    /// Formula of the "Formula" stimulus (numexpr syntax)
+    void setFormula(const QString &formula);
 
 protected:
     void redraw() override;
@@ -43,6 +48,8 @@ private:
     void calc();
     void drawTime();
     void drawFreq();
+    void drawSpgr();
+    void applyFileNorm();
     void changed();
 
     pyfda::StimParams m_p;
@@ -62,6 +69,16 @@ private:
     QSpinBox *m_N, *m_N_start, *m_mls_b;
     QLabel *m_lbl_mls, *m_lbl_win_par, *m_info;
     QTabWidget *m_tabs;
-    PlotWidget *m_plot_t, *m_plot_f;
+    PlotWidget *m_plot_t, *m_plot_f, *m_plot_s;
+    QLineEdit *m_formula;
+    QWidget *m_wdg_formula, *m_wdg_file;
+    QPushButton *m_load;
+    QLabel *m_file_lbl;
+    QCheckBox *m_file_norm;
+    pyfda::Vec m_file_raw;
+    // spectrogram
+    QComboBox *m_s_sig, *m_s_mode;
+    QCheckBox *m_s_db;
+    QSpinBox *m_s_nfft, *m_s_ovlp;
     QCheckBox *m_t_stim, *m_t_resp, *m_t_db, *m_f_stim, *m_f_resp, *m_f_hid, *m_f_db, *m_f_norm;
 };

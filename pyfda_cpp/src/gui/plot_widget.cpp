@@ -56,10 +56,37 @@ QColor PlotWidget::color(int i) {
     return cycle[((i % 8) + 8) % 8];
 }
 
+void PlotWidget::setImage(const QImage &img, double x0, double x1, double y0, double y1, double zlo, double zhi,
+                          const QString &zlabel) {
+    m_image = img;
+    m_ix0 = x0;
+    m_ix1 = x1;
+    m_iy0 = y0;
+    m_iy1 = y1;
+    m_zlo = zlo;
+    m_zhi = zhi;
+    m_zlabel = zlabel;
+}
+
+QRgb PlotWidget::colormap(double t) {
+    // samples of matplotlib's viridis
+    static const double c[][3] = {{0.267, 0.005, 0.329}, {0.283, 0.141, 0.458}, {0.254, 0.265, 0.530},
+                                  {0.207, 0.372, 0.553}, {0.164, 0.471, 0.558}, {0.128, 0.567, 0.551},
+                                  {0.135, 0.659, 0.518}, {0.267, 0.749, 0.441}, {0.478, 0.821, 0.318},
+                                  {0.741, 0.873, 0.150}, {0.993, 0.906, 0.144}};
+    if (!std::isfinite(t)) t = 0;
+    t = std::clamp(t, 0.0, 1.0) * 10;
+    const int i = std::min(9, int(t));
+    const double f = t - i;
+    auto ch = [&](int k) { return int(255 * (c[i][k] + f * (c[i + 1][k] - c[i][k])) + 0.5); };
+    return qRgb(ch(0), ch(1), ch(2));
+}
+
 void PlotWidget::clear() {
     m_curves.clear();
     m_regions.clear();
     m_labels.clear();
+    m_image = QImage();
     m_title.clear();
     m_message.clear();
     m_xlo = m_xhi = m_ylo = m_yhi = NaN;
@@ -113,6 +140,12 @@ void PlotWidget::autoscale() {
             y1 = std::max(y1, 0.0);
         }
     }
+    if (!m_image.isNull()) {
+        x0 = std::min(x0, m_ix0);
+        x1 = std::max(x1, m_ix1);
+        y0 = std::min(y0, m_iy0);
+        y1 = std::max(y1, m_iy1);
+    }
     if (!std::isfinite(x0)) {
         x0 = 0;
         x1 = 1;
@@ -132,7 +165,7 @@ void PlotWidget::autoscale() {
         y0 -= d;
         y1 += d;
     }
-    const double dy = (y1 - y0) * 0.05;
+    const double dy = m_image.isNull() ? (y1 - y0) * 0.05 : 0.0;
     m_x0 = x0;
     m_x1 = x1;
     m_y0 = y0 - dy;
@@ -152,7 +185,8 @@ QRectF PlotWidget::plotRect() const {
     const double left = fm.horizontalAdvance("-0.00000") + fm.height() + 8;
     const double top = m_title.isEmpty() ? 10 : fm.height() + 14;
     const double bottom = 2 * fm.height() + 12;
-    return QRectF(left, top, std::max(10.0, width() - left - 16), std::max(10.0, height() - top - bottom));
+    const double right = m_image.isNull() ? 16 : 16 + 20 + fm.horizontalAdvance("-000.0") + fm.height() + 10;
+    return QRectF(left, top, std::max(10.0, width() - left - right), std::max(10.0, height() - top - bottom));
 }
 
 void PlotWidget::applyEqualAspect() {
@@ -302,7 +336,7 @@ void PlotWidget::paintEvent(QPaintEvent *) {
         p.drawText(QRectF(0, 2, width(), fm.height() + 8), Qt::AlignCenter, m_title);
         p.setFont(font());
     }
-    if (m_curves.isEmpty() && !m_message.isEmpty()) {
+    if (m_curves.isEmpty() && m_image.isNull() && !m_message.isEmpty()) {
         p.setPen(fg);
         p.drawRect(r);
         p.drawText(r, Qt::AlignCenter | Qt::TextWordWrap, m_message);
@@ -343,6 +377,13 @@ void PlotWidget::paintEvent(QPaintEvent *) {
     // data
     p.save();
     p.setClipRect(r.adjusted(-1, -1, 1, 1));
+    if (!m_image.isNull()) {
+        const QPointF a = toPixel(m_ix0, m_iy1), b = toPixel(m_ix1, m_iy0);
+        p.save();
+        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        p.drawImage(QRectF(a, b).normalized(), m_image);
+        p.restore();
+    }
     for (const Region &g : m_regions) {
         const QPointF a = toPixel(g.x0, g.y1), b = toPixel(g.x1, g.y0);
         p.fillRect(QRectF(a, b).normalized(), g.color);
@@ -355,6 +396,29 @@ void PlotWidget::paintEvent(QPaintEvent *) {
     p.restore();
     p.setPen(QPen(fg, 1));
     p.drawRect(r);
+
+    // color bar of the image
+    if (!m_image.isNull()) {
+        const QRectF cb(r.right() + 12, r.top(), 16, r.height());
+        QImage bar(1, 256, QImage::Format_RGB32);
+        for (int i = 0; i < 256; ++i) bar.setPixel(0, 255 - i, colormap(i / 255.0));
+        p.drawImage(cb, bar);
+        p.setPen(QPen(fg, 1));
+        p.drawRect(cb);
+        const double zs = nice_step(m_zhi - m_zlo, std::max(2, int(r.height() / 45)));
+        if (m_zhi > m_zlo && zs > 0)
+            for (double z = std::ceil(m_zlo / zs) * zs; z <= m_zhi + zs * 1e-9; z += zs) {
+                const double py = cb.bottom() - (z - m_zlo) / (m_zhi - m_zlo) * cb.height();
+                p.drawLine(QPointF(cb.right(), py), QPointF(cb.right() + 3, py));
+                p.drawText(QPointF(cb.right() + 5, py + fm.ascent() / 2.5), fmt_tick(z, zs));
+            }
+        p.save();
+        p.translate(width() - fm.height() / 2.0 - 2, cb.center().y());
+        p.rotate(-90);
+        p.drawText(QRectF(-cb.height() / 2, -fm.height() / 2.0, cb.height(), fm.height() + 2), Qt::AlignCenter,
+                   m_zlabel);
+        p.restore();
+    }
 
     // legend
     QStringList names;

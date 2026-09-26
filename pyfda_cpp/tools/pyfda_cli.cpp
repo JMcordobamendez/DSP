@@ -197,6 +197,13 @@ StimParams parse_stim(std::istringstream &in) {
             static const std::map<std::string, Noise> nm = {{"none", Noise::None}, {"gauss", Noise::Gauss}, {"uniform", Noise::Uniform},
                                                            {"randint", Noise::RandInt}, {"mls", Noise::MLS}, {"brownian", Noise::Brownian}};
             p.noise = nm.at(v);
+        } else if (k == "fs") p.f_s = std::stod(v);
+        else if (k == "formula") {  // the rest of the line
+            std::string rest;
+            std::getline(in, rest);
+            p.formula = v + rest;
+            p.stim = Stim::Formula;
+            break;
         } else throw DesignError("unknown key " + k);
     }
     return p;
@@ -382,6 +389,17 @@ std::string run(const std::string &line) {
         const StimParams p = parse_stim(in);
         return "{\"x\":" + arr(calc_stimulus(p, n)) + ",\"title\":" + str(stim_title(p)) + ",\"scale\":" +
                num(impulse_scale(p)) + "}";
+    }
+    if (cmd == "spgr") {  // spgr <psd|magnitude|angle> <density 0/1> <fs> <window> <par> <nperseg> <noverlap> <x>
+        std::string mode, w, x;
+        int dens, nper, novl;
+        double fs, par;
+        in >> mode >> dens >> fs >> w >> par >> nper >> novl >> x;
+        const SpgrMode m = mode == "psd" ? SpgrMode::PSD : mode == "magnitude" ? SpgrMode::Magnitude : SpgrMode::Angle;
+        const Spectrogram r = spectrogram(list(x), fs, fft_window(win_type(w), nper, par), novl, m, dens == 1);
+        std::string s = "[";
+        for (size_t i = 0; i < r.s.size(); ++i) s += (i ? "," : "") + arr(r.s[i]);
+        return "{\"f\":" + arr(r.f) + ",\"t\":" + arr(r.t) + ",\"s\":" + s + "]}";
     }
     if (cmd == "wfft") {
         std::string w, x;

@@ -10,6 +10,7 @@
 #include "types.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace pyfda {
@@ -19,7 +20,9 @@ enum class Stim {
     Sine, Cos, Diric,                                  // sinusoids
     Chirp,
     Triang, Saw, RectPer, Comb,                        // periodic
-    AM, PMFM, PWM                                      // modulation
+    AM, PMFM, PWM,                                     // modulation
+    Formula,                                           // expression of n and t
+    File                                               // data loaded from a file
 };
 enum class ChirpType { Linear, Quadratic, Logarithmic, Hyperbolic };
 enum class Noise { None, Gauss, Uniform, RandInt, MLS, Brownian };
@@ -54,6 +57,13 @@ struct StimParams {
     int mls_b = 8;                    // bits of the maximum length sequence
     double dc = 0.0;
     uint32_t seed = 1;                // seed for random noise
+    double f_s = 1.0;                 // sampling frequency for t = n / f_S in formulas
+    // formula stimulus (numexpr syntax, see expr.hpp) with the variables n, t, A1, A2,
+    // f1, f2, phi1, phi2, T1, T2, N1, BW1, BW2, f_S, pi, e
+    std::string formula = "A1 * abs(sin(2 * pi * f1 * n))";
+    // data of the file stimulus, zero padded / truncated to the number of samples
+    std::shared_ptr<const Vec> x_file;
+    std::string file_name;
 };
 
 /// Stimulus x[n], n = 0 ... n_end - 1; throws DesignError for invalid parameters
@@ -89,5 +99,15 @@ double window_nenbw(const Vec &win);
 CVec windowed_fft(const Vec &x, const Vec &win);
 /// Single-sided spectrum from a double-sided one (pyfda calc_ssb_spectrum, mag = False)
 CVec ssb_spectrum(const CVec &X);
+
+/// scipy.signal.spectrogram for real x with a given (periodic) window, noverlap
+/// overlapping samples, detrend='constant', one-sided spectrum
+enum class SpgrMode { PSD, Magnitude, Angle };
+struct Spectrogram {
+    Vec f, t;              // bin frequencies and segment centers (in units of fs)
+    std::vector<Vec> s;    // s[segment][bin]
+};
+Spectrogram spectrogram(const Vec &x, double fs, const Vec &win, int noverlap, SpgrMode mode,
+                        bool density = true);
 
 }  // namespace pyfda
