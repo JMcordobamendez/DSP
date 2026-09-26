@@ -515,4 +515,47 @@ Spectrogram spectrogram(const Vec &x, double fs, const Vec &win, int noverlap, S
     return r;
 }
 
+WindowProps window_props(const Vec &win, int zero_pad) {
+    WindowProps r;
+    const size_t N = win.size();
+    if (N == 0) return r;
+    r.cgain = window_cgain(win);
+    r.nenbw = window_nenbw(win);
+    size_t L = 1;
+    while (L < N * size_t(std::max(zero_pad, 2))) L <<= 1;  // power of 2 for the FFT
+    CVec x(L, 0.0);
+    for (size_t i = 0; i < N; ++i) x[i] = win[i];
+    const CVec X = fft(x);
+    const double W0 = std::abs(X[0]);
+    const double step = double(N) / double(L);  // bins per FFT point
+    Vec m(L / 2 + 1);
+    for (size_t k = 0; k <= L / 2; ++k) m[k] = std::abs(X[k]) / W0;
+    for (size_t k = 0; k <= L / 2; ++k) {
+        r.F_bins.push_back(k * step);
+        r.W_db.push_back(20 * std::log10(std::max(m[k], 1e-15)));
+    }
+    // scallop loss: response half a bin off (exact DTFT)
+    cplx h(0, 0);
+    for (size_t i = 0; i < N; ++i) h += win[i] * std::exp(cplx(0, -PI * double(i) / double(N)));
+    r.scallop_db = -20 * std::log10(std::abs(h) / W0);
+    // bandwidths (two-sided, interpolated) and end of the main lobe (first minimum)
+    auto width = [&](double level) {
+        for (size_t k = 1; k < m.size(); ++k)
+            if (m[k] < level) {
+                const double f = (k - 1 + (m[k - 1] - level) / (m[k - 1] - m[k])) * step;
+                return 2 * f;
+            }
+        return 0.0;
+    };
+    r.bw3_bins = width(std::pow(10.0, -3.0 / 20));
+    r.bw6_bins = width(0.5);
+    // first local minimum below -20 dB (flat top windows have ripples in the main lobe)
+    size_t k = 1;
+    while (k + 1 < m.size() && (m[k + 1] <= m[k] || m[k] > 0.1)) ++k;
+    double sl = 0;
+    for (size_t j = k; j < m.size(); ++j) sl = std::max(sl, m[j]);
+    r.sidelobe_db = k + 1 < m.size() ? 20 * std::log10(std::max(sl, 1e-15)) : -300;
+    return r;
+}
+
 }  // namespace pyfda

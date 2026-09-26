@@ -21,6 +21,7 @@
 #include "fixpoint_tab.hpp"
 #include "main_window.hpp"
 #include "tran_tab.hpp"
+#include "window_viewer.hpp"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -128,6 +129,10 @@ int main(int argc, char *argv[]) {
                 w.tran()->innerTabs()->setCurrentIndex(0);
             }
         }
+        WindowViewer wv(&w);  // window viewer with the default window
+        wv.show();
+        app.processEvents();
+        wv.grab().save(QString("%1/window_viewer.png").arg(dir));
         return rc;
     }
     if (parser.isSet(optExport) || parser.isSet(optSaveFilt) || parser.isSet(optTranExp) || parser.isSet(optHdl))

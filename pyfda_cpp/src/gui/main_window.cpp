@@ -3,6 +3,8 @@
 #include "coeffs_tab.hpp"
 #include "data_filt_tab.hpp"
 #include "fixpoint_tab.hpp"
+#include "info_tab.hpp"
+#include "window_viewer.hpp"
 #include "filter_io.hpp"
 #include "logger.hpp"
 #include "response_tabs.hpp"
@@ -52,6 +54,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_fix = new FixpointView(this);
     add(m_fix, tr("Fixpoint"), tr("Fixpoint formats, quantized coefficients, COE / VHDL export"));
     connect(m_fix, &FixpointView::fxChanged, this, [this] { m_tran->setFixpoint(m_fix->spec(), m_fix->simulate()); });
+    add(new InfoView(this), tr("Info"), tr("Filter properties and specifications vs. achieved values"));
     m_data_filt = new DataFiltView(this);
     add(m_data_filt, tr("Data Filt"), tr("Filter data from a file with the current design"));
 
@@ -93,6 +96,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     });
     file->addSeparator();
     file->addAction(tr("&Quit"), QKeySequence::Quit, qApp, &QApplication::quit);
+    auto *tools = menuBar()->addMenu(tr("&Tools"));
+    tools->addAction(tr("&Window viewer ..."), this, [this] {
+        auto *v = new WindowViewer(this);
+        v->setAttribute(Qt::WA_DeleteOnClose);
+        v->show();
+    });
     auto *help = menuBar()->addMenu(tr("&Help"));
     help->addAction(tr("&About"), this, [this] {
         QMessageBox::about(this, tr("About pyfda C++"),

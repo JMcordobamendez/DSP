@@ -930,6 +930,39 @@ for fir in (0, 1):
                 r = call(f"amp to {ref!r} {unit} {fir} {pb}")
                 close(f"amp to dB {unit} fir={fir} pb={pb}", r['v'], db, 1e-10)
 
+# ---- filter info: achieved ripple / attenuation per band, stability, linear phase ----
+for spec in ("rt=LP method=ellip fo=min f_s=1", "rt=HP method=cheby1 fo=min f_s=1 f_pb=0.2 f_sb=0.1",
+             "rt=BP method=butter fo=min f_s=1 f_sb=0.1 f_pb=0.15 f_pb2=0.3 f_sb2=0.35",
+             "rt=BS method=equiripple fo=min f_s=1 f_pb=0.1 f_sb=0.15 f_sb2=0.3 f_pb2=0.35",
+             "rt=LP method=firwin fo=min window=kaiser f_s=1",
+             "rt=LP method=ma fo=min stages=2 f_s=1 f_sb=0.1 A_SB=40"):
+    r = call(f"info {spec}")
+    b, a = np.array(r['b']), np.array(r['a'])
+    for band in r['bands']:
+        w = 2 * np.pi * np.linspace(band['f0'], band['f1'], 2000)
+        _, H = sig.freqz(b, a, worN=w)
+        m = 20 * np.log10(np.maximum(np.abs(H), 1e-15))
+        ach = m.max() - m.min() if band['pass'] else -m.max()
+        close(f"info {spec} {band['name']}", band['achieved'], ach, 1e-6, 1e-9)
+    check(f"info {spec} stable", r['stable'] == bool(np.all(np.abs(np.roots(a)) < 1)) if len(a) > 1 else r['stable'])
+    check(f"info {spec} bands", len(r['bands']) >= 1)
+r = call("info rt=LP method=ellip fo=min f_s=1")
+check("info ellip meets specs", all(b['ok'] for b in r['bands']), str(r['bands']))
+r = call("info rt=LP method=equiripple fo=manual N=30 f_s=1")
+check("info equiripple linear phase", r['linear_phase'] and r['min_phase'] is False, str(r)[:200])
+
+# ---- window properties (textbook values, F. J. Harris 1978 / numpy) ----
+for wname, sl_ref, sc_ref, nenbw_ref in (("rectangular", -13.26, 3.92, 1.0), ("hann", -31.47, 1.42, 1.5),
+                                         ("blackman-harris", -92.0, 0.83, 2.0), ("flattop", -91.5, 0.01, 3.77)):
+    r = call(f"wprops {wname} 128 0")
+    win = sig.get_window({'rectangular': 'boxcar', 'blackman-harris': 'blackmanharris'}.get(wname, wname), 128)
+    close(f"wprops {wname} cgain", r['cgain'], np.mean(win), 1e-12)
+    close(f"wprops {wname} nenbw", r['nenbw'], len(win) * np.sum(win ** 2) / np.sum(win) ** 2, 1e-12)
+    W = np.fft.fft(win, 128 * 256)
+    m = np.abs(W[:len(W) // 2]) / np.abs(W[0])
+    check(f"wprops {wname} scallop", abs(r['scallop'] + 20 * np.log10(m[128])) < 1e-6, str(r))
+    check(f"wprops {wname} sidelobe {r['sidelobe']:.2f}", abs(r['sidelobe'] - sl_ref) < 1.5, str(r))
+
 proc.stdin.close()
 proc.wait()
 print(f"{n_pass} checks passed, {n_fail} failed")

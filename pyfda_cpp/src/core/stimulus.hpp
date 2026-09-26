@@ -110,4 +110,14 @@ struct Spectrogram {
 Spectrogram spectrogram(const Vec &x, double fs, const Vec &win, int noverlap, SpgrMode mode,
                         bool density = true);
 
+/// Figures of merit of a window (pyfda's window viewer): coherent gain, NENBW
+/// (bins), scallop loss (dB at half a bin), 3 dB and 6 dB bandwidth (bins),
+/// highest side lobe (dB relative to the main lobe) and the zero padded
+/// magnitude spectrum (F in bins, dB normalized to 0 dB)
+struct WindowProps {
+    double cgain = 0, nenbw = 0, scallop_db = 0, bw3_bins = 0, bw6_bins = 0, sidelobe_db = 0;
+    Vec F_bins, W_db;
+};
+WindowProps window_props(const Vec &win, int zero_pad = 64);
+
 }  // namespace pyfda

@@ -143,6 +143,17 @@ pyfda usa `N` como número de coeficientes en el método de ventana.
 * Especificaciones de amplitud en **dB, V o W** (`unit2lin`/`lin2unit` de pyfda, distintas
   para FIR e IIR en la banda de paso). Internamente y en el JSON se guardan en dB.
 
+## Fase 8: información y visor de ventanas
+
+* Pestaña **Info** (como `input_info` de pyfda): tipo, orden, nº de coeficientes y
+  secciones, estabilidad (máx. |p|), fase mínima, |H(0)|, |H(f_S/2)|, máx. |H| y una
+  tabla **especificaciones vs. conseguido** por banda (rizado en la banda de paso,
+  atenuación en la de rechazo) marcando OK o fallo. Comprobado con `scipy.signal.freqz`.
+* **Tools → Window viewer ...** (como `plot_fft_win` de pyfda): ventana en el tiempo,
+  espectro con zero padding (lineal o dB) y sus propiedades: ganancia coherente, NENBW,
+  pérdida de scalloping, ancho de banda a 3 y 6 dB y lóbulo lateral máximo. Comparado con
+  los valores calculados en numpy.
+
 ## Verificación
 
 ```
@@ -180,7 +191,8 @@ Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 
 * En el análisis transitorio: estímulos complejos (exp, `j` en fórmulas). Gráfica 3D.
 * Edición de polos/ceros arrastrándolos en la gráfica P/Z.
-* Visor de ventanas FFT, pestaña de información, fichero de configuración y traducciones.
+* Fichero de configuración y traducciones.
+* Ventana `general_gaussian`.
 * Datos complejos en Data Filt (ahora solo reales).
 
 ## Licencias

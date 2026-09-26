@@ -29,6 +29,7 @@
 //   fxauto <fir|sos> coeffs key=... ...      automatic formats
 //   coe radix b WI,WF,quant,ovfl             Xilinx COE file
 //   vhdl <fir|sos> coeffs key=... ...        VHDL entity (name fir_filter / iir_filter)
+#include "../src/core/filter_info.hpp"
 #include "../src/core/conversions.hpp"
 #include "../src/core/data_io.hpp"
 #include "../src/core/filter_design.hpp"
@@ -389,6 +390,30 @@ std::string run(const std::string &line) {
         const StimParams p = parse_stim(in);
         return "{\"x\":" + arr(calc_stimulus(p, n)) + ",\"title\":" + str(stim_title(p)) + ",\"scale\":" +
                num(impulse_scale(p)) + "}";
+    }
+    if (cmd == "wprops") {  // wprops <window> <N> <par>
+        std::string w;
+        int n;
+        double par;
+        in >> w >> n >> par;
+        const WindowProps p = window_props(fft_window(win_type(w), n, par));
+        return "{\"cgain\":" + num(p.cgain) + ",\"nenbw\":" + num(p.nenbw) + ",\"scallop\":" + num(p.scallop_db) +
+               ",\"bw3\":" + num(p.bw3_bins) + ",\"bw6\":" + num(p.bw6_bins) + ",\"sidelobe\":" + num(p.sidelobe_db) + "}";
+    }
+    if (cmd == "info") {
+        const FilterDesign d = design_filter(parse_spec(in));
+        const FilterInfo fi = filter_info(d);
+        std::string bands = "[";
+        for (size_t i = 0; i < fi.bands.size(); ++i) {
+            const BandCheck &b = fi.bands[i];
+            bands += std::string(i ? "," : "") + "{\"name\":" + str(b.name) + ",\"f0\":" + num(b.f0) + ",\"f1\":" +
+                     num(b.f1) + ",\"pass\":" + (b.pass ? "true" : "false") + ",\"spec\":" + num(b.spec_db) +
+                     ",\"achieved\":" + num(b.achieved_db) + ",\"ok\":" + (b.ok ? "true" : "false") + "}";
+        }
+        return "{\"order\":" + std::to_string(fi.order) + ",\"stable\":" + (fi.stable ? "true" : "false") +
+               ",\"min_phase\":" + (fi.min_phase ? "true" : "false") + ",\"linear_phase\":" +
+               (fi.linear_phase ? "true" : "false") + ",\"rmax\":" + num(fi.max_pole_radius) + ",\"b\":" + arr(d.ba.b) +
+               ",\"a\":" + arr(d.ba.a) + ",\"bands\":" + bands + "]}";
     }
     if (cmd == "amp") {  // amp <to|from> <value> <dB|V|W> <fir 0/1> <pb 0/1>
         std::string dir, u;
