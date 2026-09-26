@@ -11,6 +11,7 @@ class QTabWidget;
 class QPlainTextEdit;
 class DataFiltView;
 class CoeffsView;
+class TranView;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -25,6 +26,7 @@ public:
     /// Save the current design as a filter file (JSON)
     bool saveFilter(const QString &file_name);
     QTabWidget *tabs() const { return m_tabs; }
+    TranView *tran() const { return m_tran; }
 
 private slots:
     void onLog(int level, const QString &text);
@@ -38,6 +40,7 @@ private:
     QPlainTextEdit *m_log;
     DataFiltView *m_data_filt;
     CoeffsView *m_coeffs;
+    TranView *m_tran;
     QString m_filter_dir;
     QList<DesignView *> m_views;
     std::unique_ptr<pyfda::FilterDesign> m_design;

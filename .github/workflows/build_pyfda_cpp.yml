@@ -72,6 +72,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist/pyfda_cpp | Out-Null
           Copy-Item build/pyfda_cpp.exe dist/pyfda_cpp/
           Copy-Item pyfda_cpp/examples/measurement.csv dist/pyfda_cpp/
+          Copy-Item pyfda_cpp/examples/lowpass_50Hz.json dist/pyfda_cpp/
           windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw dist/pyfda_cpp/pyfda_cpp.exe
 
       - name: Smoke test of the executable
@@ -84,6 +85,13 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "pyfda_cpp.exe failed with exit code $($p.ExitCode)" }
           if (-not (Test-Path smoke.csv)) { throw "smoke.csv was not written" }
           Get-Content smoke.csv -TotalCount 3
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/lowpass_50Hz.json', '--save-filter', 'smoke.json', '--stim', 'sine', '--tran-export', 'tran.csv' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "pyfda_cpp.exe failed with exit code $($p.ExitCode)" }
+          # coefficients may differ in the last digit between compilers, compare the specs only
+          $saved = Get-Content smoke.json -Raw | ConvertFrom-Json
+          $orig = Get-Content pyfda_cpp/examples/lowpass_50Hz.json -Raw | ConvertFrom-Json
+          if (($saved.spec | ConvertTo-Json) -ne ($orig.spec | ConvertTo-Json)) { throw "saved filter specs differ from the loaded ones" }
+          Get-Content tran.csv -TotalCount 3
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

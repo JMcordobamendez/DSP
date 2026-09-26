@@ -20,6 +20,8 @@
 //   tojson unit key=value ...                filter file (JSON text) of a design
 //   fromjson <file>                          design from a filter file
 //   export <csv|matlab|c|python> key=value ...  exported coefficients as text
+//   stim n_end key=value ...                 stimulus (see parse_stim)
+//   wfft <window> par x                      windowed FFT (pyfda transient analysis)
 #include "../src/core/conversions.hpp"
 #include "../src/core/data_io.hpp"
 #include "../src/core/filter_design.hpp"
@@ -28,6 +30,7 @@
 #include "../src/core/fir_design.hpp"
 #include "../src/core/iir_design.hpp"
 #include "../src/core/poly.hpp"
+#include "../src/core/stimulus.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -137,6 +140,41 @@ FilterSpec parse_spec(std::istringstream &in) {
         else throw DesignError("unknown key " + k);
     }
     return s;
+}
+
+StimParams parse_stim(std::istringstream &in) {
+    StimParams p;
+    std::string kv;
+    while (in >> kv) {
+        const auto pos = kv.find('=');
+        const std::string k = kv.substr(0, pos), v = kv.substr(pos + 1);
+        const std::map<std::string, double *> nums = {{"a1", &p.a1},   {"a2", &p.a2},   {"f1", &p.f1},   {"f2", &p.f2},
+                                                      {"phi1", &p.phi1}, {"phi2", &p.phi2}, {"t1", &p.t1}, {"t2", &p.t2},
+                                                      {"tw", &p.tw},   {"bw1", &p.bw1}, {"bw2", &p.bw2}, {"duty", &p.duty},
+                                                      {"noi", &p.noi}, {"dc", &p.dc}};
+        if (auto it = nums.find(k); it != nums.end()) *it->second = std::stod(v);
+        else if (k == "stim") {
+            bool found = false;
+            for (const auto &i : stim_list())
+                if (v == i.key) {
+                    p.stim = i.stim;
+                    found = true;
+                }
+            if (!found) throw DesignError("unknown stimulus " + v);
+        } else if (k == "n1") p.n1 = std::stoi(v);
+        else if (k == "mls_b") p.mls_b = std::stoi(v);
+        else if (k == "bl") p.bl = v == "1";
+        else if (k == "chirp") {
+            static const std::map<std::string, ChirpType> cm = {{"linear", ChirpType::Linear}, {"quadratic", ChirpType::Quadratic},
+                                                               {"logarithmic", ChirpType::Logarithmic}, {"hyperbolic", ChirpType::Hyperbolic}};
+            p.chirp = cm.at(v);
+        } else if (k == "noise") {
+            static const std::map<std::string, Noise> nm = {{"none", Noise::None}, {"gauss", Noise::Gauss}, {"uniform", Noise::Uniform},
+                                                           {"randint", Noise::RandInt}, {"mls", Noise::MLS}, {"brownian", Noise::Brownian}};
+            p.noise = nm.at(v);
+        } else throw DesignError("unknown key " + k);
+    }
+    return p;
 }
 
 std::string run(const std::string &line) {
@@ -276,6 +314,23 @@ std::string run(const std::string &line) {
         static const std::map<std::string, CoeffFormat> fm = {{"csv", CoeffFormat::Csv}, {"matlab", CoeffFormat::Matlab},
                                                              {"c", CoeffFormat::CHeader}, {"python", CoeffFormat::Python}};
         return "{\"text\":" + str(export_coeffs(design_filter(parse_spec(in)), fm.at(f), "lp filter")) + "}";
+    }
+    if (cmd == "stim") {
+        int n;
+        in >> n;
+        const StimParams p = parse_stim(in);
+        return "{\"x\":" + arr(calc_stimulus(p, n)) + ",\"title\":" + str(stim_title(p)) + ",\"scale\":" +
+               num(impulse_scale(p)) + "}";
+    }
+    if (cmd == "wfft") {
+        std::string w, x;
+        double par;
+        in >> w >> par >> x;
+        const Vec xv = list(x);
+        const Vec win = fft_window(win_type(w), int(xv.size()), par);
+        return "{\"win\":" + arr(win) + ",\"X\":" + carr(windowed_fft(xv, win)) + ",\"ssb\":" +
+               carr(ssb_spectrum(windowed_fft(xv, win))) + ",\"cgain\":" + num(window_cgain(win)) + ",\"nenbw\":" +
+               num(window_nenbw(win)) + "}";
     }
     throw DesignError("unknown command " + cmd);
 }

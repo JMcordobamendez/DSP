@@ -471,6 +471,139 @@ with tempfile.TemporaryDirectory() as tmp:
         r = call(f"fromjson {fn}")
         check(f"fromjson invalid {i}", 'error' in r, str(r))
 
+# ---------------------------------------------------------------------------
+# stimuli of the transient analysis: reference = pyfda's calc_stimulus_frame()
+# with the bandlimited waveforms of pyfda.libs.special_functions (by Endolith)
+from scipy.special import diric
+
+
+def sawtooth_bl(t):
+    y = np.zeros(t.shape)
+    fs = 1 / (t[1] - t[0])
+    for h in range(1, int(fs * np.pi) + 1):
+        y += 2 / np.pi * -np.sin(h * t) / h
+    return y
+
+
+def triang_bl(t):
+    y = np.zeros(t.shape)
+    fs = 1 / (t[1] - t[0])
+    for h in range(1, int(fs * np.pi) + 1, 2):
+        y += 8 / np.pi**2 * -np.cos(h * t) / h**2
+    return y
+
+
+def rect_bl(t, duty=0.5):
+    return sawtooth_bl(t - duty * 2 * np.pi) - sawtooth_bl(t) + 2 * duty - 1
+
+
+def comb_bl(t):
+    y = np.zeros(t.shape)
+    fs = 1 / (t[1] - t[0])
+    N = int(fs * np.pi) + 1
+    for h in range(1, N):
+        y += np.cos(h * t)
+    return y / N
+
+
+def stim_py(n_end, stim="dirac", a1=1., a2=0., f1=0.02, f2=0.03, phi1=0., phi2=0., t1=0., t2=0.,
+            tw=10., bw1=0.5, bw2=0.5, n1=5, duty=0.5, bl=True, chirp="linear", noise="none", noi=0.1,
+            mls_b=8, dc=0.):
+    n = np.arange(n_end)
+    x = np.zeros(n_end)
+    t1_idx = int(np.round(t1))
+    r1, r2 = phi1 / 180 * np.pi, phi2 / 180 * np.pi
+    if stim == "dirac":
+        if 0 <= t1_idx < n_end:
+            x[t1_idx] = a1
+    elif stim == "sinc":
+        x = a1 * np.sinc(2 * (n - t1) * f1) + a2 * np.sinc(2 * (n - t2) * f2)
+    elif stim == "gauss":
+        x = a1 * sig.gausspulse(n - t1, fc=f1, bw=bw1) + a2 * sig.gausspulse(n - t2, fc=f2, bw=bw2)
+    elif stim == "rect":
+        n_rise = int(t1_idx - np.floor(tw / 2))
+        x = a1 * np.where((n >= max(n_rise, 0)) & (n < min(n_rise + tw, n_end)), 1, 0)
+    elif stim == "step":
+        x[t1_idx:] = a1
+    elif stim == "cos":
+        x = a1 * np.cos(2 * np.pi * n * f1 + r1) + a2 * np.cos(2 * np.pi * n * f2 + r2)
+    elif stim == "sine":
+        x = a1 * np.sin(2 * np.pi * n * f1 + r1) + a2 * np.sin(2 * np.pi * n * f2 + r2)
+    elif stim == "diric":
+        x = a1 * diric(2 * np.pi * (n - t1) * f1, n1)
+    elif stim == "chirp":  # phase in degrees (pyfda passes radians)
+        x = a1 * sig.chirp(n, f1, n_end if t2 == 0 else t2, f2, method=chirp, phi=phi1)
+    elif stim == "triang":
+        x = a1 * (triang_bl(2 * np.pi * n * f1 + r1) if bl else sig.sawtooth(2 * np.pi * n * f1 + r1, width=0.5))
+    elif stim == "saw":
+        x = a1 * (sawtooth_bl(2 * np.pi * n * f1 + r1) if bl else sig.sawtooth(2 * np.pi * n * f1 + r1))
+    elif stim == "rect_per":
+        x = a1 * (rect_bl(2 * np.pi * n * f1 + r1, duty=duty) if bl
+                  else sig.square(2 * np.pi * n * f1 + r1, duty=duty))
+    elif stim == "comb":
+        x = a1 * comb_bl(2 * np.pi * n * f1 + r1)
+    elif stim == "am":
+        x = a1 * np.sin(2 * np.pi * n * f1 + r1) * a2 * np.sin(2 * np.pi * n * f2 + r2)
+    elif stim == "pmfm":
+        x = a1 * np.sin(2 * np.pi * n * f1 + r1 + a2 * np.sin(2 * np.pi * n * f2 + r2))
+    elif stim == "pwm":
+        d = 1 / 2 + a2 / 2 * np.sin(2 * np.pi * n * f2 + r2)
+        x = a1 * (rect_bl(2 * np.pi * n * f1 + r1, duty=d) if bl else sig.square(2 * np.pi * n * f1 + r1, duty=d))
+    if noise == "mls":
+        seed = [1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1,
+                0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0][:mls_b]
+        x = x + sig.max_len_seq(mls_b, length=n_end, state=seed)[0] * noi
+    if stim != "step" and dc != 0:
+        x = x + dc
+    return np.asarray(x, dtype=float)
+
+
+stim_cases = [
+    (100, dict(stim="dirac", t1=3)), (100, dict(stim="dirac", t1=2.5, a1=2)),
+    (200, dict(stim="sinc", t1=50, t2=80, f1=0.1, f2=0.05, a2=0.5)),
+    (200, dict(stim="gauss", t1=60, t2=120, f1=0.1, f2=0.2, a2=0.7, bw1=0.3, bw2=0.8)),
+    (100, dict(stim="rect", t1=20, tw=7)), (100, dict(stim="rect", t1=2, tw=10)),
+    (100, dict(stim="step", t1=10, a1=3)),
+    (300, dict(stim="cos", f1=0.013, f2=0.21, a2=0.3, phi1=30, phi2=-45)),
+    (300, dict(stim="sine", f1=0.013, f2=0.21, a2=0.3, phi1=30, dc=0.5)),
+    (300, dict(stim="diric", f1=0.05, t1=10, n1=7)), (300, dict(stim="diric", f1=0.1, n1=4)),
+    (500, dict(stim="chirp", f1=0.01, f2=0.4)), (500, dict(stim="chirp", f1=0.01, f2=0.4, t2=300, phi1=20)),
+    (500, dict(stim="chirp", chirp="quadratic", f1=0.01, f2=0.3)),
+    (500, dict(stim="chirp", chirp="logarithmic", f1=0.01, f2=0.3)),
+    (500, dict(stim="chirp", chirp="hyperbolic", f1=0.01, f2=0.3)),
+    (400, dict(stim="triang", f1=0.023, phi1=10)), (400, dict(stim="triang", f1=0.023, bl=False)),
+    (400, dict(stim="saw", f1=0.031)), (400, dict(stim="saw", f1=0.031, bl=False, phi1=90)),
+    (400, dict(stim="rect_per", f1=0.02, duty=0.3)), (400, dict(stim="rect_per", f1=0.02, duty=0.3, bl=False)),
+    (400, dict(stim="comb", f1=0.05)),
+    (400, dict(stim="am", f1=0.1, f2=0.01, a2=1)), (400, dict(stim="pmfm", f1=0.1, f2=0.01, a2=2)),
+    (400, dict(stim="pwm", f1=0.05, f2=0.005, a2=0.8)), (400, dict(stim="pwm", f1=0.05, f2=0.005, a2=0.8, bl=False)),
+    (300, dict(stim="dirac", noise="mls", noi=0.5, mls_b=5)), (5000, dict(stim="sine", noise="mls", noi=1, mls_b=12)),
+]
+for n_end, kw in stim_cases:
+    ref = stim_py(n_end, **kw)
+    cmd = f"stim {n_end} " + " ".join(f"{k}={int(v) if isinstance(v, bool) else v}" for k, v in kw.items())
+    r = call(cmd)
+    if 'error' in r:
+        check(cmd, False, r['error'])
+        continue
+    close(cmd, r['x'], ref, 1e-12, 1e-12)
+# random noise can't be compared, check the statistics
+for noise, mean, std in [("gauss", 0, 0.5), ("uniform", 0, 0.5 / np.sqrt(12)), ("randint", 1.5, np.sqrt(1.25))]:
+    noi = 3 if noise == "randint" else 0.5
+    x = np.array(call(f"stim 20000 stim=none noise={noise} noi={noi}")['x'])
+    check(f"noise {noise}", abs(x.mean() - mean) < 0.05 and abs(x.std() - std) < 0.05 * std + 0.01,
+          f"mean {x.mean()}, std {x.std()}")
+# windowed FFT like pyfda's calc_fft (window / cgain, scaled by 1/N)
+for w, par in [("rectangular", 0), ("hann", 0), ("kaiser", 8), ("flattop", 0)]:
+    x = np.sin(2 * np.pi * 0.1 * np.arange(64)) + 0.3
+    r = call(f"wfft {w} {par} {L(x)}")
+    win = sig.get_window((w, par) if w == "kaiser" else ("boxcar" if w == "rectangular" else w), 64, fftbins=True)
+    close(f"fft window {w}", r['win'], win, 1e-13)
+    X = np.fft.fft(x * win / np.mean(win)) / 64
+    close(f"windowed fft {w}", cplx(r['X']), X, 1e-12, 1e-14)
+    close(f"ssb {w}", cplx(r['ssb']), np.insert(X[1:32] * 2, 0, X[0]), 1e-12, 1e-14)
+    close(f"nenbw {w}", [r['nenbw']], [64 * np.sum(win**2) / np.sum(win)**2], 1e-12)
+
 proc.stdin.close()
 proc.wait()
 print(f"{n_pass} checks passed, {n_fail} failed")

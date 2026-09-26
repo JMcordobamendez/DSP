@@ -6,6 +6,7 @@
 #include "logger.hpp"
 #include "response_tabs.hpp"
 #include "spec_panel.hpp"
+#include "tran_tab.hpp"
 
 #include <QApplication>
 #include <QDateTime>
@@ -43,6 +44,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     add(new GroupDelayView(this), QString::fromUtf8("τ(f)"), tr("Group delay"));
     add(new PoleZeroView(this), "P / Z", tr("Pole / zero plot"));
     add(new ImpulseView(this), "h[n]", tr("Impulse and step response"));
+    m_tran = new TranView(this);
+    add(m_tran, "y[n]", tr("Transient analysis: stimulus and response in the time and frequency domain"));
     m_coeffs = new CoeffsView(this);
     add(m_coeffs, tr("Coeffs"), tr("Filter coefficients"));
     m_data_filt = new DataFiltView(this);

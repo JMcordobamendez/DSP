@@ -6,9 +6,12 @@
 //   --data <file>          load a data file into the "Data Filt" tab
 //   --filter               filter the loaded data with the default design
 //   --export <file.csv>    export original and filtered data
+//   --stim <name>          stimulus of the transient analysis (dirac, step, sine, ...)
+//   --tran-export <file>   export stimulus and response of the transient analysis
 //   --screenshot <dir>     save a screenshot of every tab and quit
 #include "data_filt_tab.hpp"
 #include "main_window.hpp"
+#include "tran_tab.hpp"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -32,7 +35,9 @@ int main(int argc, char *argv[]) {
     QCommandLineOption optShot("screenshot", "Save screenshots of all tabs to <dir> and quit.", "dir");
     QCommandLineOption optLoadFilt("load-filter", "Load a filter file (JSON).", "file");
     QCommandLineOption optSaveFilt("save-filter", "Save the design as filter file (JSON) and quit.", "file");
-    parser.addOptions({optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt});
+    QCommandLineOption optStim("stim", "Stimulus of the transient analysis.", "name");
+    QCommandLineOption optTranExp("tran-export", "Export the transient stimulus and response as CSV.", "file");
+    parser.addOptions({optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp});
     parser.process(app);
 
     MainWindow w;
@@ -40,6 +45,18 @@ int main(int argc, char *argv[]) {
     int rc = 0;
     if (parser.isSet(optLoadFilt) && !w.openFilter(parser.value(optLoadFilt))) rc = 1;
     if (parser.isSet(optSaveFilt) && !w.saveFilter(parser.value(optSaveFilt))) rc = 1;
+    if (parser.isSet(optStim)) {
+        pyfda::StimParams p = w.tran()->params();
+        bool found = false;
+        for (const auto &i : pyfda::stim_list())
+            if (parser.value(optStim) == i.key) {
+                p.stim = i.stim;
+                found = true;
+            }
+        if (found) w.tran()->setParams(p);
+        else rc = 1;
+    }
+    if (parser.isSet(optTranExp) && !w.tran()->saveCsv(parser.value(optTranExp))) rc = 1;
     if (parser.isSet(optData) && !w.dataFilt()->loadFile(parser.value(optData))) rc = 1;
     if (parser.isSet(optFilter)) w.dataFilt()->filterData();
     if (parser.isSet(optExport) && !w.dataFilt()->saveCsv(parser.value(optExport))) rc = 1;
@@ -50,9 +67,15 @@ int main(int argc, char *argv[]) {
             w.tabs()->setCurrentIndex(i);
             app.processEvents();
             w.grab().save(QString("%1/tab%2.png").arg(dir).arg(i));
+            if (w.tabs()->currentWidget() == w.tran()) {  // frequency domain of the transient analysis
+                w.tran()->innerTabs()->setCurrentIndex(1);
+                app.processEvents();
+                w.grab().save(QString("%1/tab%2_freq.png").arg(dir).arg(i));
+                w.tran()->innerTabs()->setCurrentIndex(0);
+            }
         }
         return rc;
     }
-    if (parser.isSet(optExport) || parser.isSet(optSaveFilt)) return rc;
+    if (parser.isSet(optExport) || parser.isSet(optSaveFilt) || parser.isSet(optTranExp)) return rc;
     return app.exec();
 }
