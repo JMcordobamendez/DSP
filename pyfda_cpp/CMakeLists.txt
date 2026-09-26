@@ -47,6 +47,7 @@ if(PYFDA_BUILD_GUI)
         src/gui/data_filt_tab.cpp
         src/gui/coeffs_tab.cpp
         src/gui/tran_tab.cpp
+        src/gui/fixpoint_tab.cpp
         src/gui/coeffs_tab.hpp
         src/gui/data_filt_tab.hpp
         src/gui/design_view.hpp
@@ -56,6 +57,7 @@ if(PYFDA_BUILD_GUI)
         src/gui/response_tabs.hpp
         src/gui/spec_panel.hpp
         src/gui/tran_tab.hpp
+        src/gui/fixpoint_tab.hpp
     )
     target_link_libraries(pyfda_cpp PRIVATE pyfda_core Qt6::Widgets)
     install(TARGETS pyfda_cpp RUNTIME DESTINATION .)

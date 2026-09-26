@@ -462,6 +462,19 @@ with tempfile.TemporaryDirectory() as tmp:
         ok = rows[0] == ["b", "a"] and [float(r[0]) for r in rows[1:] if r[0]] == ref['b'] \
             and [float(r[1]) for r in rows[1:] if r[1]] == ref['a']
         check(f"export csv {spec}", ok, t[:300])
+    # fixpoint settings (optional)
+    doc = json.loads(call("tojson Hz rt=LP method=ellip")['json'])
+    doc['fixpoint'] = {"simulate": True, "acc_auto": False, "QACC": {"WI": 3, "WF": 20, "quant": "ceil", "ovfl": "sat"}}
+    fn = os.path.join(tmp, "fx.json")
+    with open(fn, 'w', encoding='utf-8') as f:
+        json.dump(doc, f)
+    r = call(f"fromjson {fn}")
+    check("fromjson fixpoint", r.get('has_fx') is True and r.get('fx_sim') is True
+          and r.get('qacc') == [3, 20, "ceil", "sat"], str(r)[:300])
+    doc['fixpoint']['QACC']['quant'] = "nearest"
+    with open(fn, 'w', encoding='utf-8') as f:
+        json.dump(doc, f)
+    check("fromjson fixpoint invalid", 'error' in call(f"fromjson {fn}"))
     # invalid files give a readable error instead of a crash
     for i, text in enumerate(['{"format": "x"}', '{"format": "pyfda_cpp filter", "spec": {"rt": "XX"}}',
                               '{"format": "pyfda_cpp filter", "spec": {"N": 0}}', '[1, 2', '']):

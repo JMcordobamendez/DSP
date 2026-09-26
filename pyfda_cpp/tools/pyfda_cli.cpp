@@ -345,7 +345,10 @@ std::string run(const std::string &line) {
         return "{\"unit\":" + str(ff.unit) + ",\"rt\":" + str(resp_type_key(ff.spec.rt)) + ",\"method\":" +
                str(method_key(ff.spec.method)) + ",\"N\":" + std::to_string(d.spec.N) + ",\"b\":" + arr(d.ba.b) +
                ",\"a\":" + arr(d.ba.a) + ",\"sos\":" + sosarr(d.sos) + ",\"file_b\":" + arr(ff.ba.b) +
-               ",\"file_a\":" + arr(ff.ba.a) + ",\"file_sos\":" + sosarr(ff.sos) + "}";
+               ",\"file_a\":" + arr(ff.ba.a) + ",\"file_sos\":" + sosarr(ff.sos) + ",\"has_fx\":" +
+               (ff.has_fx ? "true" : "false") + ",\"fx_sim\":" + (ff.fx_sim ? "true" : "false") + ",\"qacc\":[" +
+               std::to_string(ff.fx.qacc.WI) + "," + std::to_string(ff.fx.qacc.WF) + "," + str(quant_key(ff.fx.qacc.quant)) +
+               "," + str(ovfl_key(ff.fx.qacc.ovfl)) + "]}";
     }
     if (cmd == "export") {
         std::string f;

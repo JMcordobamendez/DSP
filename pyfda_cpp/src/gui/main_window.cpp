@@ -2,6 +2,7 @@
 
 #include "coeffs_tab.hpp"
 #include "data_filt_tab.hpp"
+#include "fixpoint_tab.hpp"
 #include "filter_io.hpp"
 #include "logger.hpp"
 #include "response_tabs.hpp"
@@ -48,6 +49,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     add(m_tran, "y[n]", tr("Transient analysis: stimulus and response in the time and frequency domain"));
     m_coeffs = new CoeffsView(this);
     add(m_coeffs, tr("Coeffs"), tr("Filter coefficients"));
+    m_fix = new FixpointView(this);
+    add(m_fix, tr("Fixpoint"), tr("Fixpoint formats, quantized coefficients, COE / VHDL export"));
+    connect(m_fix, &FixpointView::fxChanged, this, [this] { m_tran->setFixpoint(m_fix->spec(), m_fix->simulate()); });
     m_data_filt = new DataFiltView(this);
     add(m_data_filt, tr("Data Filt"), tr("Filter data from a file with the current design"));
 
@@ -152,6 +156,7 @@ bool MainWindow::openFilter(const QString &file_name) {
     m_specs->setSpec(ff.spec, QString::fromStdString(ff.unit));
     Logger::info(tr("Loaded filter '%1'.").arg(file_name));
     if (!design()) return false;
+    if (ff.has_fx) m_fix->setSpec(ff.fx, ff.fx_sim);
     // the stored coefficients are only for reference, warn if the design differs
     // (e.g. file edited by hand or written by a different version)
     auto differs = [](const Vec &a, const Vec &b) {
@@ -175,7 +180,7 @@ bool MainWindow::saveFilter(const QString &file_name) {
         Logger::error(tr("No filter designed yet."));
         return false;
     }
-    const std::string text = filter_to_json(*m_design, m_specs->unitKey().toStdString());
+    const std::string text = filter_to_json(*m_design, m_specs->unitKey().toStdString(), &m_fix->spec(), m_fix->simulate());
     QFile f(file_name);
     if (!f.open(QIODevice::WriteOnly) || f.write(text.data(), qint64(text.size())) != qint64(text.size())) {
         Logger::error(tr("Couldn't write '%1'.").arg(file_name));

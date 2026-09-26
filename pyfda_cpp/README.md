@@ -13,7 +13,8 @@ respuesta a distintos estímulos y filtrar datos medidos.
 | `src/core/` | Núcleo numérico sin dependencias (ni Qt): ports de `scipy.signal` y de la lógica de pyfda |
 | `src/gui/` | Interfaz Qt 6 Widgets, gráficas propias con `QPainter` (sin matplotlib ni Qt Charts) |
 | `tools/pyfda_cli.cpp` | CLI que expone el núcleo para compararlo con scipy |
-| `tests/verify_scipy.py` | ~1400 comprobaciones contra scipy y contra el lector CSV en Python de pyfda |
+| `tests/verify_scipy.py` | ~1700 comprobaciones contra scipy/pyfda y contra el lector CSV en Python de pyfda |
+| `tests/verify_vhdl.py` | Simula con GHDL el VHDL generado y lo compara bit a bit con el modelo en coma fija |
 | `examples/measurement.csv` | CSV de ejemplo (1 kHz, 10 Hz + 300 Hz + ruido) |
 | `examples/lowpass_50Hz.json` | Filtro de ejemplo (elíptico, paso bajo 50 Hz a f_S = 1 kHz) |
 
@@ -60,6 +61,28 @@ respuesta a distintos estímulos y filtrar datos medidos.
   (pyfda pasa radianes a `scipy.signal.chirp`, que espera grados) y el ruido aleatorio no
   reproduce la secuencia de NumPy.
 
+## Fase 3: coma fija
+
+* **Cuantizador** (port de `Fixed` de `pyfda_fix_lib.py`): formatos Q con WI bits enteros,
+  WF fraccionarios y signo; cuantización floor, round (a par, como `numpy.round`), fix,
+  ceil o ninguna; desbordamiento por saturación, *wrap-around* en complemento a dos o
+  ninguno, con contadores. Coincide bit a bit con pyfda (comparado con 285 formatos).
+* **Pestaña Fixpoint**: formatos de entrada, coeficientes b y a, acumulador y salida, con
+  modo automático (bits enteros de los coeficientes y acumulador sin redondeo de los
+  productos con bits de guarda); tabla de coeficientes cuantizados (valor, error, entero
+  y hex/bin/oct/CSD) y |H(f)| ideal frente a la de los coeficientes cuantizados.
+* **Simulación en coma fija** en la pestaña `y[n]`: respuesta en coma fija, respuesta en
+  coma flotante como referencia, desbordamientos por etapa y error máximo. FIR en forma
+  directa (igual que `fir_df_pyfixp`, bit a bit); IIR como cascada de secciones de segundo
+  orden en forma directa 1 (pyfda usa `iir_df1` con la función de transferencia completa,
+  que se vuelve inestable en órdenes altos).
+* **Exportación**: fichero COE de Xilinx (FIR Compiler) y **VHDL sintetizable**
+  (`numeric_std`, VHDL-2008) del filtro FIR o IIR. `tests/verify_vhdl.py` lo simula con
+  GHDL y comprueba que la salida es idéntica bit a bit al modelo, también con
+  desbordamientos. pyfda genera Verilog con amaranth (Python); aquí se genera VHDL sin
+  dependencias.
+* Los ajustes de coma fija se guardan en el fichero JSON del filtro.
+
 Diferencia con pyfda: en los FIR, `N` es siempre el **orden** (número de coeficientes − 1).
 pyfda usa `N` como número de coeficientes en el método de ventana.
 
@@ -91,17 +114,18 @@ pasa los tests contra scipy y sube `pyfda_cpp.exe` con las DLL de Qt como artefa
 `pyfda_cpp_win`.
 
 Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
-`--save-filter f.json`, `--stim sine`, `--tran-export t.csv`, `--data fichero`,
+`--save-filter f.json`, `--stim sine`, `--tran-export t.csv`, `--fixpoint`,
+`--export-hdl filtro.vhd|.coe`, `--data fichero`,
 `--filter`, `--export salida.csv`, `--screenshot carpeta`.
 
 ## Pendiente para siguientes fases
 
 * En el análisis transitorio: estímulos complejos (exp), fórmula libre, espectrograma,
   datos de fichero como estímulo y condiciones iniciales. Gráfica 3D.
-* Coma fija: cuantización, `fixpoint_widgets`, simulación y exportación HDL (amaranth).
+* Coma fija: formato de visualización entero (`qint`), otras estructuras (FIR transpuesta,
+  IIR DF2), exportación Verilog y testbench VHDL.
 * Edición manual de coeficientes y de polos/ceros, métodos *Moving Average*, *Delay* y
   *Manual*.
-* Exportar coeficientes cuantizados (COE de Xilinx, VHDL, ...), junto con la coma fija.
 * Visor de ventanas FFT y el resto de ventanas de pyfda, más unidades (f_Ny, k),
   especificaciones de amplitud en V/W, pestaña de información, fichero de configuración
   y traducciones.

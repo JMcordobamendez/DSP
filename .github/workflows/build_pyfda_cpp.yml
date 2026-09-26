@@ -98,6 +98,9 @@ jobs:
           $orig = Get-Content pyfda_cpp/examples/lowpass_50Hz.json -Raw | ConvertFrom-Json
           if (($saved.spec | ConvertTo-Json) -ne ($orig.spec | ConvertTo-Json)) { throw "saved filter specs differ from the loaded ones" }
           Get-Content tran.csv -TotalCount 3
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/lowpass_50Hz.json', '--fixpoint', '--tran-export', 'tran_fx.csv', '--export-hdl', 'lowpass.vhd' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "pyfda_cpp.exe failed with exit code $($p.ExitCode)" }
+          if (-not (Select-String -Path lowpass.vhd -Pattern 'entity lowpass is' -Quiet)) { throw "VHDL was not written" }
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

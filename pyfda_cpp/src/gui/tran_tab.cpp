@@ -280,6 +280,12 @@ void TranView::setParams(const StimParams &p) {
     changed();
 }
 
+void TranView::setFixpoint(const FxSpec &spec, bool on) {
+    m_fx = spec;
+    m_fx_on = on;
+    changed();
+}
+
 void TranView::updateVisibility() {
     for (auto it = m_param_widgets.begin(); it != m_param_widgets.end(); ++it)
         it.value()->setVisible(stim_uses(m_p.stim, it.key().toStdString()));
@@ -396,6 +402,30 @@ void TranView::calc() {
         return;
     }
     m_y = m_design->sos.empty() ? lfilter(m_design->ba.b, m_design->ba.a, m_x) : sosfilt(m_design->sos, m_x);
+    m_y_float.clear();
+    m_fx_info.clear();
+    if (m_fx_on) {
+        try {
+            const FxResult r = m_design->fir ? fx_filter_fir(m_design->ba.b, m_fx, m_x) : fx_filter_sos(m_design->sos, m_fx, m_x);
+            m_y_float = m_y;
+            m_y = r.y;
+            double err = 0;
+            for (size_t i = size_t(m_n_start); i < m_y.size(); ++i) err = std::max(err, std::fabs(m_y[i] - m_y_float[i]));
+            m_fx_info = tr("Fixpoint: overflows input %1, accumulator %2, output %3, coefficients %4; "
+                           "max. |y - y_float| = %5")
+                            .arg(r.n_over_i)
+                            .arg(r.n_over_acc)
+                            .arg(r.n_over_o)
+                            .arg(r.n_over_coeff)
+                            .arg(err, 0, 'g', 4);
+            if (r.n_over_i + r.n_over_acc + r.n_over_o + r.n_over_coeff > 0)
+                Logger::warning(tr("Fixpoint simulation: %1 overflow(s).")
+                                    .arg(r.n_over_i + r.n_over_acc + r.n_over_o + r.n_over_coeff));
+        } catch (const std::exception &e) {
+            m_fx_info = tr("Fixpoint simulation failed: %1").arg(e.what());
+            Logger::error(m_fx_info);
+        }
+    }
     if (m_p.stim == Stim::Step && m_step_err->isChecked()) {
         // settling error: subtract the DC response from the response after the step
         const double dc = std::abs((m_design->sos.empty() ? freqz(m_design->ba, {0.0}) : freqz(m_design->sos, {0.0}))[0]);
@@ -429,10 +459,20 @@ void TranView::drawTime() {
     }
     const bool step_err = m_p.stim == Stim::Step && m_step_err->isChecked();
     if (m_t_stim->isChecked()) m_plot_t->addCurve(t, x, PlotWidget::color(1), "x[n]", PlotWidget::Style::Line);
+    if (m_t_resp->isChecked() && !m_y_float.empty()) {
+        PlotWidget::Curve c;
+        c.x = t;
+        for (int n = m_n_start; n < n_end; ++n) c.y << (log ? db(m_y_float[size_t(n)]) : m_y_float[size_t(n)]);
+        c.color = PlotWidget::color(2);
+        c.name = "y_float[n]";
+        c.pen = Qt::DashLine;
+        m_plot_t->addCurve(c);
+    }
     if (m_t_resp->isChecked())
-        m_plot_t->addCurve(t, y, PlotWidget::color(0), step_err ? QString::fromUtf8("ε[n]") : "y[n]",
+        m_plot_t->addCurve(t, y, PlotWidget::color(0),
+                           (step_err ? QString::fromUtf8("ε[n]") : QString("y[n]")) + (m_y_float.empty() ? "" : " (fixpoint)"),
                            log || t.size() > 300 ? PlotWidget::Style::Line : PlotWidget::Style::Stem);
-    m_plot_t->setTitle(QString::fromStdString(stim_title(m_p, step_err)));
+    m_plot_t->setTitle((m_y_float.empty() ? QString() : tr("Fixpoint ")) + QString::fromStdString(stim_title(m_p, step_err)));
     m_plot_t->setYLabel(log ? tr("Magnitude / dB") : tr("Amplitude"));
     m_plot_t->setYLimits(log ? -80 : NaN, NaN);
     m_plot_t->autoscale();
@@ -520,7 +560,8 @@ void TranView::drawFreq() {
                         .arg(N)
                         .arg(wi.name)
                         .arg(nenbw, 0, 'f', 3)
-                        .arg(cgain, 0, 'f', 3));
+                        .arg(cgain, 0, 'f', 3) +
+                    (m_fx_info.isEmpty() ? QString() : "\n" + m_fx_info));
 }
 
 bool TranView::saveCsv(const QString &file_name) {

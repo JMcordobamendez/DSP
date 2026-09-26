@@ -302,7 +302,7 @@ const int FORMAT_VERSION = 1;
 
 }  // namespace
 
-std::string filter_to_json(const FilterDesign &d, const std::string &unit) {
+std::string filter_to_json(const FilterDesign &d, const std::string &unit, const FxSpec *fx, bool fx_sim) {
     const FilterSpec &s = d.spec;
     std::ostringstream o;
     o << "{\n  \"format\": " << quote(FORMAT_ID) << ",\n  \"version\": " << FORMAT_VERSION << ",\n";
@@ -323,6 +323,17 @@ std::string filter_to_json(const FilterDesign &d, const std::string &unit) {
     o << "    \"order_alg\": " << quote(order_alg_key(s.order_alg)) << ",\n";
     o << "    \"grid_density\": " << s.grid_density << "\n";
     o << "  },\n";
+    if (fx) {
+        auto q = [](const QFormat &f) {
+            return "{\"WI\": " + std::to_string(f.WI) + ", \"WF\": " + std::to_string(f.WF) + ", \"quant\": " +
+                   quote(quant_key(f.quant)) + ", \"ovfl\": " + quote(ovfl_key(f.ovfl)) + "}";
+        };
+        o << "  \"fixpoint\": {\n    \"simulate\": " << (fx_sim ? "true" : "false") << ",\n";
+        o << "    \"coeff_auto\": " << (fx->coeff_auto ? "true" : "false") << ", \"acc_auto\": "
+          << (fx->acc_auto ? "true" : "false") << ",\n";
+        o << "    \"QI\": " << q(fx->qi) << ",\n    \"QCB\": " << q(fx->qcb) << ",\n    \"QCA\": " << q(fx->qca)
+          << ",\n    \"QACC\": " << q(fx->qacc) << ",\n    \"QO\": " << q(fx->qo) << "\n  },\n";
+    }
     o << "  \"b\": " << vec(d.ba.b) << ",\n";
     o << "  \"a\": " << vec(d.ba.a) << ",\n";
     o << "  \"sos\": [";
@@ -372,6 +383,31 @@ FilterFile filter_from_json(const std::string &text) {
         throw DesignError("Invalid filter file: unknown unit '" + f.unit + "'");
     if (!(s.f_s > 0)) throw DesignError("Invalid filter file: f_S must be > 0");
     if (s.N < 1) throw DesignError("Invalid filter file: N must be >= 1");
+    if (const Json *fx = root.get("fixpoint"); fx && fx->type == Json::Object) {
+        f.has_fx = true;
+        auto flag = [&](const char *k, bool &target) {
+            if (const Json *v = fx->get(k)) {
+                if (v->type != Json::Bool) throw DesignError(std::string("Invalid filter file: '") + k + "' must be true or false");
+                target = v->boolean;
+            }
+        };
+        flag("simulate", f.fx_sim);
+        flag("coeff_auto", f.fx.coeff_auto);
+        flag("acc_auto", f.fx.acc_auto);
+        const std::map<std::string, QFormat *> qs = {
+            {"QI", &f.fx.qi}, {"QCB", &f.fx.qcb}, {"QCA", &f.fx.qca}, {"QACC", &f.fx.qacc}, {"QO", &f.fx.qo}};
+        for (const auto &kv : qs) {
+            const Json *q = fx->get(kv.first);
+            if (!q) continue;
+            if (q->type != Json::Object) throw DesignError("Invalid filter file: '" + kv.first + "' must be an object");
+            if (const Json *v = q->get("WI")) kv.second->WI = int(as_num(*v, "WI"));
+            if (const Json *v = q->get("WF")) kv.second->WF = int(as_num(*v, "WF"));
+            if (const Json *v = q->get("quant")) kv.second->quant = quant_from_key(as_str(*v, "quant"));
+            if (const Json *v = q->get("ovfl")) kv.second->ovfl = ovfl_from_key(as_str(*v, "ovfl"));
+            if (kv.second->WI < 0 || kv.second->WI > 32 || kv.second->WF < 0 || kv.second->WF > 60)
+                throw DesignError("Invalid filter file: word lengths of '" + kv.first + "' out of range");
+        }
+    }
     if (const Json *b = root.get("b")) f.ba.b = as_vec(*b, "b");
     if (const Json *a = root.get("a")) f.ba.a = as_vec(*a, "a");
     if (const Json *sos = root.get("sos"); sos && sos->type == Json::Array) {
@@ -405,8 +441,9 @@ void write_file(const std::string &fn, const std::string &text) {
 }
 }  // namespace
 
-void save_filter(const std::string &file_name, const FilterDesign &d, const std::string &unit) {
-    write_file(file_name, filter_to_json(d, unit));
+void save_filter(const std::string &file_name, const FilterDesign &d, const std::string &unit, const FxSpec *fx,
+                 bool fx_sim) {
+    write_file(file_name, filter_to_json(d, unit, fx, fx_sim));
 }
 
 FilterFile load_filter(const std::string &file_name) { return filter_from_json(read_file(file_name)); }

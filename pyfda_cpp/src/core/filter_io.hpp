@@ -7,6 +7,7 @@
 #pragma once
 
 #include "filter_design.hpp"
+#include "fixpoint.hpp"
 
 #include <string>
 
@@ -29,15 +30,20 @@ struct FilterFile {
     std::string unit = "f_S";  // frequency unit of the specs: "f_S" (normalized), "Hz", "kHz", "MHz"
     Ba ba;                     // stored coefficients (only for reference)
     Sos sos;
+    bool has_fx = false;       // fixpoint settings stored
+    FxSpec fx;
+    bool fx_sim = false;       // fixpoint simulation enabled
 };
 
 /// JSON text of a design (the specs used and the resulting coefficients)
-std::string filter_to_json(const FilterDesign &d, const std::string &unit = "f_S");
+std::string filter_to_json(const FilterDesign &d, const std::string &unit = "f_S", const FxSpec *fx = nullptr,
+                           bool fx_sim = false);
 /// Parse a filter file, throws DesignError with a readable message on errors.
 /// Missing keys keep their default values.
 FilterFile filter_from_json(const std::string &text);
 
-void save_filter(const std::string &file_name, const FilterDesign &d, const std::string &unit = "f_S");
+void save_filter(const std::string &file_name, const FilterDesign &d, const std::string &unit = "f_S",
+                 const FxSpec *fx = nullptr, bool fx_sim = false);
 FilterFile load_filter(const std::string &file_name);
 
 enum class CoeffFormat { Csv, Matlab, CHeader, Python };

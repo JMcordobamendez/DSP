@@ -4,6 +4,7 @@
 #pragma once
 
 #include "design_view.hpp"
+#include "fixpoint.hpp"
 #include "stimulus.hpp"
 
 #include <QMap>
@@ -22,6 +23,8 @@ public:
     explicit TranView(QWidget *parent = nullptr);
     const pyfda::StimParams &params() const { return m_p; }
     void setParams(const pyfda::StimParams &p);
+    /// Calculate the response with the fixpoint filter when `on`
+    void setFixpoint(const pyfda::FxSpec &spec, bool on);
     /// Stimulus and response as calculated for the current display
     const pyfda::Vec &stimulus() const { return m_x; }
     const pyfda::Vec &response() const { return m_y; }
@@ -44,7 +47,10 @@ private:
 
     pyfda::StimParams m_p;
     bool m_dirty = true;
-    pyfda::Vec m_x, m_y;
+    pyfda::Vec m_x, m_y, m_y_float;
+    pyfda::FxSpec m_fx;
+    bool m_fx_on = false;
+    QString m_fx_info;
     int m_n_start = 0;
     QString m_error;
 

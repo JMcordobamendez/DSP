@@ -8,8 +8,11 @@
 //   --export <file.csv>    export original and filtered data
 //   --stim <name>          stimulus of the transient analysis (dirac, step, sine, ...)
 //   --tran-export <file>   export stimulus and response of the transient analysis
+//   --fixpoint             fixpoint simulation in the transient analysis
+//   --export-hdl <file>    export the fixpoint filter (.vhd or .coe)
 //   --screenshot <dir>     save a screenshot of every tab and quit
 #include "data_filt_tab.hpp"
+#include "fixpoint_tab.hpp"
 #include "main_window.hpp"
 #include "tran_tab.hpp"
 
@@ -37,14 +40,19 @@ int main(int argc, char *argv[]) {
     QCommandLineOption optSaveFilt("save-filter", "Save the design as filter file (JSON) and quit.", "file");
     QCommandLineOption optStim("stim", "Stimulus of the transient analysis.", "name");
     QCommandLineOption optTranExp("tran-export", "Export the transient stimulus and response as CSV.", "file");
-    parser.addOptions({optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp});
+    QCommandLineOption optFix("fixpoint", "Fixpoint simulation in the transient analysis.");
+    QCommandLineOption optHdl("export-hdl", "Export the fixpoint filter as VHDL (.vhd) or COE (.coe) and quit.", "file");
+    parser.addOptions({optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp, optFix,
+                       optHdl});
     parser.process(app);
 
     MainWindow w;
     w.show();
     int rc = 0;
     if (parser.isSet(optLoadFilt) && !w.openFilter(parser.value(optLoadFilt))) rc = 1;
+    if (parser.isSet(optFix)) w.fixpoint()->setSpec(w.fixpoint()->spec(), true);
     if (parser.isSet(optSaveFilt) && !w.saveFilter(parser.value(optSaveFilt))) rc = 1;
+    if (parser.isSet(optHdl) && !w.fixpoint()->exportFile(parser.value(optHdl))) rc = 1;
     if (parser.isSet(optStim)) {
         pyfda::StimParams p = w.tran()->params();
         bool found = false;
@@ -76,6 +84,7 @@ int main(int argc, char *argv[]) {
         }
         return rc;
     }
-    if (parser.isSet(optExport) || parser.isSet(optSaveFilt) || parser.isSet(optTranExp)) return rc;
+    if (parser.isSet(optExport) || parser.isSet(optSaveFilt) || parser.isSet(optTranExp) || parser.isSet(optHdl))
+        return rc;
     return app.exec();
 }

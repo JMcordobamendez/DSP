@@ -12,6 +12,7 @@ class QPlainTextEdit;
 class DataFiltView;
 class CoeffsView;
 class TranView;
+class FixpointView;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -27,6 +28,7 @@ public:
     bool saveFilter(const QString &file_name);
     QTabWidget *tabs() const { return m_tabs; }
     TranView *tran() const { return m_tran; }
+    FixpointView *fixpoint() const { return m_fix; }
 
 private slots:
     void onLog(int level, const QString &text);
@@ -41,6 +43,7 @@ private:
     DataFiltView *m_data_filt;
     CoeffsView *m_coeffs;
     TranView *m_tran;
+    FixpointView *m_fix;
     QString m_filter_dir;
     QList<DesignView *> m_views;
     std::unique_ptr<pyfda::FilterDesign> m_design;
