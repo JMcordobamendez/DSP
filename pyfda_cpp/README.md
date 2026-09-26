@@ -171,6 +171,27 @@ también desde **File → Preferences ...**:
 `--config-dir carpeta` usa otra carpeta de configuración y `--quit` cierra la ventana al
 momento (guardando la sesión), para las pruebas.
 
+## Fase 10: señales complejas
+
+Como en pyfda, el análisis transitorio y Data Filt trabajan con señales complejas:
+
+* Estímulo **Exp (complex)**: A1·exp(j(2π f1 n + φ1)) + A2·exp(j(2π f2 n + φ2)).
+* **A1, A2, DC y el ruido** admiten valores complejos (`1 - 3j`, `2j`, `exp(1j*pi/4)`); un
+  ruido complejo añade ruido independiente a la parte real y a la imaginaria.
+* **Fórmulas con `j`** (`exp(2j*pi*f1*n)`, `sqrt(-1+0j)`) y las funciones `real`, `imag`,
+  `conj` y `complex`. Como numexpr, una fórmula real se sigue evaluando con números reales.
+* En y[n] las partes **real e imaginaria** se dibujan en dos gráficas, el **espectro** y el
+  **espectrograma** son de dos lados (-f_S/2 ... f_S/2) y el CSV exporta `x_re, x_im,
+  y_re, y_im`. Los coeficientes son reales, así que la parte real y la imaginaria se
+  filtran por separado (también en coma fija).
+* **Datos complejos en ficheros**: arrays `.npy` complejos (complex64/128) y celdas CSV como
+  `1+2j`, `(1+2j)` (formato de `numpy.savetxt`) o `1+2i` (Matlab). Data Filt dibuja la
+  parte real (continua) y la imaginaria (discontinua), el espectro de dos lados y exporta
+  las dos partes; el estímulo "File" también acepta datos complejos.
+
+Comparado con numpy (fórmulas, estímulos), scipy (`spectrogram(..., return_onesided=False)`,
+`sosfilt` de datos complejos) y la lectura de ficheros de numpy.
+
 ## Verificación
 
 ```
@@ -206,11 +227,10 @@ Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 
 ## Pendiente para siguientes fases
 
-* En el análisis transitorio: estímulos complejos (exp, `j` en fórmulas). Gráfica 3D.
+* Gráfica 3D.
 * Edición de polos/ceros arrastrándolos en la gráfica P/Z.
 * Traducciones.
 * Ventana `general_gaussian`.
-* Datos complejos en Data Filt (ahora solo reales).
 
 ## Licencias
 

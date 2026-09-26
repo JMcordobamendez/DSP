@@ -55,6 +55,8 @@ private:
     pyfda::StimParams m_p;
     bool m_dirty = true;
     pyfda::Vec m_x, m_y, m_y_float;
+    pyfda::Vec m_xi, m_yi, m_yi_float;  // imaginary parts of complex signals
+    bool m_cmplx = false;
     pyfda::FxSpec m_fx;
     bool m_fx_on = false;
     QString m_fx_info;
@@ -69,13 +71,14 @@ private:
     QSpinBox *m_N, *m_N_start, *m_mls_b;
     QLabel *m_lbl_mls, *m_lbl_win_par, *m_info;
     QTabWidget *m_tabs;
-    PlotWidget *m_plot_t, *m_plot_f, *m_plot_s;
+    PlotWidget *m_plot_t, *m_plot_ti, *m_plot_f, *m_plot_s;
+    QLabel *m_lbl_cmplx;
     QLineEdit *m_formula;
     QWidget *m_wdg_formula, *m_wdg_file;
     QPushButton *m_load;
     QLabel *m_file_lbl;
     QCheckBox *m_file_norm;
-    pyfda::Vec m_file_raw;
+    pyfda::Vec m_file_raw, m_file_raw_im;
     // spectrogram
     QComboBox *m_s_sig, *m_s_mode;
     QCheckBox *m_s_db;

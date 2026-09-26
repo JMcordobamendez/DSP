@@ -186,6 +186,20 @@ Vec DataTable::column(size_t col) const {
     return c;
 }
 
+bool DataTable::column_complex(size_t col) const {
+    if (imag.empty()) return false;
+    for (size_t r = 0; r < n_rows; ++r)
+        if (imag[r * n_cols + col] != 0) return true;
+    return false;
+}
+
+Vec DataTable::column_imag(size_t col) const {
+    Vec c(n_rows, 0.0);
+    if (!imag.empty())
+        for (size_t r = 0; r < n_rows; ++r) c[r] = imag[r * n_cols + col];
+    return c;
+}
+
 double str2num(const std::string &s_in) {
     std::string s = strip(s_in);
     if (s.empty()) return NaN;
@@ -209,7 +223,35 @@ double str2num(const std::string &s_in) {
     return v;
 }
 
-bool is_num(const std::string &s) { return !std::isnan(str2num(s)); }
+bool str2cplx(const std::string &s_in, cplx &v) {
+    std::string s = strip(s_in);
+    if (s.size() >= 2 && s.front() == '(' && s.back() == ')') s = strip(s.substr(1, s.size() - 2));
+    if (s.size() < 2) return false;
+    const char last = char(std::tolower(static_cast<unsigned char>(s.back())));
+    if (last != 'j' && last != 'i') return false;
+    const std::string body = s.substr(0, s.size() - 1);
+    // split at the last sign that isn't the sign of an exponent
+    size_t k = std::string::npos;
+    for (size_t i = body.size(); i-- > 1;)
+        if ((body[i] == '+' || body[i] == '-') && body[i - 1] != 'e' && body[i - 1] != 'E') {
+            k = i;
+            break;
+        }
+    const std::string re_s = k == std::string::npos ? "0" : body.substr(0, k);
+    std::string im_s = k == std::string::npos ? body : body.substr(k);
+    if (im_s == "+" || im_s == "-") im_s += "1";
+    if (im_s.empty() || (!std::isdigit(static_cast<unsigned char>(im_s.back())) && im_s.back() != '.'))
+        return false;  // e.g. a word ending with i
+    const double re = str2num(re_s), im = str2num(im_s);
+    if (std::isnan(re) || std::isnan(im)) return false;
+    v = cplx(re, im);
+    return true;
+}
+
+bool is_num(const std::string &s) {
+    cplx c;
+    return !std::isnan(str2num(s)) || str2cplx(s, c);
+}
 
 DataTable parse_text_table(const std::string &raw) {
     const std::string text = decode(raw);
@@ -281,7 +323,17 @@ DataTable parse_text_table(const std::string &raw) {
             ++n_skipped;
             continue;
         }
-        for (const std::string &cell : rows[i]) t.values.push_back(str2num(cell));
+        for (const std::string &cell : rows[i]) {
+            double v = str2num(cell), im = 0;
+            cplx c;
+            if (std::isnan(v) && str2cplx(cell, c)) {
+                v = c.real();
+                im = c.imag();
+                if (t.imag.empty()) t.imag.assign(t.values.size(), 0.0);
+            }
+            t.values.push_back(v);
+            if (!t.imag.empty()) t.imag.push_back(im);
+        }
         ++t.n_rows;
     }
     if (n_skipped)
@@ -408,10 +460,19 @@ DataTable read_npy(const std::string &file_name) {
     t.n_rows = n_rows;
     t.n_cols = n_cols;
     t.values.resize(n_rows * n_cols);
+    if (kind == 'c') t.imag.resize(n_rows * n_cols);
     for (size_t i = 0; i < n_rows * n_cols; ++i) {
         const char *p = s.data() + data_pos + i * size;
-        double v;
-        if (kind == 'f' && size == 8) std::memcpy(&v, p, 8);
+        double v, vi = 0;
+        if (kind == 'c' && size == 16) {
+            std::memcpy(&v, p, 8);
+            std::memcpy(&vi, p + 8, 8);
+        } else if (kind == 'c' && size == 8) {
+            float f[2];
+            std::memcpy(f, p, 8);
+            v = f[0];
+            vi = f[1];
+        } else if (kind == 'f' && size == 8) std::memcpy(&v, p, 8);
         else if (kind == 'f' && size == 4) { float f; std::memcpy(&f, p, 4); v = f; }
         else if (kind == 'i' && size == 2) { int16_t x; std::memcpy(&x, p, 2); v = x; }
         else if (kind == 'i' && size == 4) { int32_t x; std::memcpy(&x, p, 4); v = x; }
@@ -422,6 +483,7 @@ DataTable read_npy(const std::string &file_name) {
         const size_t r = fortran == "True" ? i % n_rows : i / n_cols;
         const size_t c = fortran == "True" ? i / n_rows : i % n_cols;
         t.values[r * n_cols + c] = v;
+        if (kind == 'c') t.imag[r * n_cols + c] = vi;
     }
     for (size_t c = 0; c < n_cols; ++c) t.names.push_back("Col " + std::to_string(c + 1));
     return t;

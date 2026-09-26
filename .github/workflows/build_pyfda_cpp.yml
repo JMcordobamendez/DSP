@@ -126,6 +126,11 @@ jobs:
           if (($saved.spec | ConvertTo-Json) -ne ($orig.spec | ConvertTo-Json)) { throw "the restored session differs from the saved one" }
           $l = Get-Content tran_es.csv -TotalCount 3
           if ($l[0] -ne 'n;t;x;y' -or $l[2] -notmatch '^1;0,') { throw "CSV format from the configuration not used: $l" }
+          # complex stimulus: real and imaginary parts are exported in separate columns
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/lowpass_50Hz.json', '--formula', 'exp(2j*pi*f1*n)', '--tran-export', 'tran_cplx.csv' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "complex stimulus failed with exit code $($p.ExitCode)" }
+          $l = Get-Content tran_cplx.csv -TotalCount 1
+          if ($l -ne 'n,t,x_re,x_im,y_re,y_im') { throw "complex transient export has the header '$l'" }
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

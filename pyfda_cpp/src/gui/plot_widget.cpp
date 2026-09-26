@@ -438,8 +438,8 @@ void PlotWidget::paintEvent(QPaintEvent *) {
         for (const Curve &c : m_curves) {
             if (c.name.isEmpty()) continue;
             const double cy = y + fm.height() / 2.0;
-            p.setPen(QPen(c.color, 2.5));
-            p.drawLine(QPointF(lr.left() + 6, cy), QPointF(lr.left() + 26, cy));
+            p.setPen(QPen(c.color, 2.0, c.pen));  // same line style as the curve (e.g. dashed)
+            p.drawLine(QPointF(lr.left() + 4, cy), QPointF(lr.left() + 28, cy));
             p.setPen(fg);
             p.drawText(QPointF(lr.left() + 32, y + fm.ascent()), c.name);
             y += fm.height() + 2;

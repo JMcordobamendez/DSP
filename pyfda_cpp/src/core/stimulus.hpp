@@ -17,7 +17,7 @@ namespace pyfda {
 
 enum class Stim {
     None, Dirac, Sinc, Gauss, Rect, Step,              // impulses / step
-    Sine, Cos, Diric,                                  // sinusoids
+    Sine, Cos, Exp, Diric,                             // sinusoids, complex exponential
     Chirp,
     Triang, Saw, RectPer, Comb,                        // periodic
     AM, PMFM, PWM,                                     // modulation
@@ -43,6 +43,7 @@ bool is_impulse(Stim s);
 struct StimParams {
     Stim stim = Stim::Dirac;
     double a1 = 1.0, a2 = 0.0;
+    double a1_im = 0.0, a2_im = 0.0;  // imaginary parts of complex amplitudes (pyfda allows e.g. 1 - 3j)
     double f1 = 0.02, f2 = 0.03;      // normalized to f_S
     double phi1 = 0.0, phi2 = 0.0;    // degrees
     double t1 = 0.0, t2 = 0.0;        // samples
@@ -54,8 +55,9 @@ struct StimParams {
     ChirpType chirp = ChirpType::Linear;
     Noise noise = Noise::None;
     double noi = 0.1;                 // noise amplitude (std. dev., peak-to-peak, max. int)
+    double noi_im = 0.0;              // imaginary part: independent noise in the imaginary part
     int mls_b = 8;                    // bits of the maximum length sequence
-    double dc = 0.0;
+    double dc = 0.0, dc_im = 0.0;
     uint32_t seed = 1;                // seed for random noise
     double f_s = 1.0;                 // sampling frequency for t = n / f_S in formulas
     // formula stimulus (numexpr syntax, see expr.hpp) with the variables n, t, A1, A2,
@@ -63,10 +65,15 @@ struct StimParams {
     std::string formula = "A1 * abs(sin(2 * pi * f1 * n))";
     // data of the file stimulus, zero padded / truncated to the number of samples
     std::shared_ptr<const Vec> x_file;
+    std::shared_ptr<const Vec> x_file_im;  // imaginary part of complex file data or null
     std::string file_name;
 };
 
-/// Stimulus x[n], n = 0 ... n_end - 1; throws DesignError for invalid parameters
+/// Stimulus x[n], n = 0 ... n_end - 1; throws DesignError for invalid parameters.
+/// `*cmplx` is set when the stimulus is complex (like pyfda: exp stimulus, complex
+/// amplitudes, DC, noise, formula or file data), even if the imaginary part is 0
+CVec calc_stimulus_c(const StimParams &p, int n_end, bool *cmplx = nullptr);
+/// Real part of calc_stimulus_c
 Vec calc_stimulus(const StimParams &p, int n_end);
 /// Energy scaling of impulses (pyfda scale_impz): 1 for dirac, 2 f1 for sinc, ...
 double impulse_scale(const StimParams &p);
@@ -97,6 +104,10 @@ double window_cgain(const Vec &win);
 double window_nenbw(const Vec &win);
 /// fft(x * win / cgain) / N like pyfda's calc_fft
 CVec windowed_fft(const Vec &x, const Vec &win);
+CVec windowed_fft(const CVec &x, const Vec &win);
+/// Two-sided spectrum from 0 ... f_S to -f_S / 2 ... f_S / 2 (numpy.fft.fftshift),
+/// bin k of the result is at (k - N / 2) * f_S / N
+CVec fftshift(const CVec &X);
 /// Single-sided spectrum from a double-sided one (pyfda calc_ssb_spectrum, mag = False)
 CVec ssb_spectrum(const CVec &X);
 
@@ -108,6 +119,10 @@ struct Spectrogram {
     std::vector<Vec> s;    // s[segment][bin]
 };
 Spectrogram spectrogram(const Vec &x, double fs, const Vec &win, int noverlap, SpgrMode mode,
+                        bool density = true);
+/// Two-sided spectrogram of complex x (return_onesided=False), frequencies sorted
+/// from -fs / 2 to fs / 2 (fftshift of scipy's result)
+Spectrogram spectrogram(const CVec &x, double fs, const Vec &win, int noverlap, SpgrMode mode,
                         bool density = true);
 
 /// Figures of merit of a window (pyfda's window viewer): coherent gain, NENBW

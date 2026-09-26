@@ -3,6 +3,7 @@
 
 #include "conversions.hpp"
 #include "data_io.hpp"
+#include "expr.hpp"
 #include "filtering.hpp"
 #include "logger.hpp"
 #include "plot_widget.hpp"
@@ -45,6 +46,28 @@ bool parse(const QLineEdit *e, double &v) {
     v = d;
     return true;
 }
+
+// complex values like in pyfda, e.g. "1 - 3j", "2j", "0.5" or "exp(1j*pi/4)"
+bool parseCplx(const QLineEdit *e, double &re, double &im) {
+    QString t = e->text().trimmed();
+    if (t.contains(',') && !t.contains('.') && !t.contains('(')) t.replace(',', '.');
+    try {
+        const Expr ex(t.toStdString(), {"pi", "e"});
+        const cplx v = ex.evalc({PI, std::exp(1.0)});
+        if (!std::isfinite(v.real()) || !std::isfinite(v.imag())) return false;
+        re = v.real();
+        im = v.imag();
+        return true;
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+QString fmtCplx(double re, double im) {
+    if (im == 0) return fmt(re);
+    if (re == 0) return fmt(im) + "j";
+    return fmt(re) + (im < 0 ? " - " : " + ") + fmt(std::fabs(im)) + "j";
+}
 }  // namespace
 
 TranView::TranView(QWidget *parent) : DesignView(parent) {
@@ -79,7 +102,8 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
                            "or Brownian (integrated Gaussian noise)</span>"));
     m_noi = new QLineEdit(fmt(m_p.noi), this);
     m_noi->setMaximumWidth(70);
-    m_noi->setToolTip(tr("Noise amplitude"));
+    m_noi->setToolTip(tr("Noise amplitude; a complex value like 0.1 + 0.2j adds independent noise to the "
+                         "real and the imaginary part"));
     m_lbl_mls = new QLabel(tr("bits:"), this);
     m_mls_b = new QSpinBox(this);
     m_mls_b->setRange(2, 32);
@@ -90,6 +114,12 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     r1->addWidget(m_lbl_mls);
     r1->addWidget(m_mls_b);
     r1->addStretch(1);
+    m_lbl_cmplx = new QLabel(tr("<b>Complex signals</b>"), this);
+    m_lbl_cmplx->setStyleSheet("QLabel {color: darkorange}");
+    m_lbl_cmplx->setToolTip(tr("<span>The stimulus is complex: real and imaginary parts are shown in two plots "
+                               "and the spectra are two-sided (-f_S/2 ... f_S/2).</span>"));
+    m_lbl_cmplx->setVisible(false);
+    r1->addWidget(m_lbl_cmplx);
     lay->addLayout(r1);
 
     // --- rows 2 and 3: parameters, only the ones used by the stimulus are shown
@@ -109,14 +139,14 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
         m_edits[key] = e;
         connect(e, &QLineEdit::editingFinished, this, [this] { readEdits(); });
     };
-    add(r2, "a1", "A1:", tr("Amplitude of the first signal component"));
+    add(r2, "a1", "A1:", tr("Amplitude of the first signal component; complex values like 1 - 3j are allowed"));
     add(r2, "a2", "A2:", tr("Amplitude of the second component (modulation index for PM / FM, "
-                            "modulation depth for PWM)"));
+                            "modulation depth for PWM); complex values like 1 - 3j are allowed"));
     add(r2, "phi1", QString::fromUtf8("φ1 / °:"), tr("Phase of the first component in degrees"));
     add(r2, "phi2", QString::fromUtf8("φ2 / °:"), tr("Phase of the second component in degrees"));
     add(r2, "duty", QString::fromUtf8("α:"), tr("Duty cycle, 0 ... 1"));
     add(r2, "n1", "N1:", tr("Order of the periodic sinc (Dirichlet) function"));
-    add(r2, "dc", "DC:", tr("DC offset added to the stimulus"));
+    add(r2, "dc", "DC:", tr("DC offset added to the stimulus, may be complex"));
     r2->addStretch(1);
     add(r3, "f1", "f1:", tr("Frequency of the first component (center frequency for impulses)"));
     add(r3, "f2", "f2:", tr("Frequency of the second component"));
@@ -138,8 +168,8 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
                              "the parameters A1, A2, f1, f2, phi1, phi2 (degrees), T1, T2, N1, BW1, BW2 (normalized "
                              "frequencies, times in samples), f_S, pi, e and the functions sin, cos, tan, arcsin, "
                              "arccos, arctan, arctan2, sinh, cosh, tanh, exp, log, log10, sqrt, abs, sign, floor, "
-                             "ceil, round, where, minimum, maximum. Operators: + - * / % **, comparisons, &amp; | ~"
-                             "</span>"));
+                             "ceil, round, where, minimum, maximum, real, imag, conj, complex. Operators: + - * / % **, "
+                             "comparisons, &amp; | ~. Complex values with j, e.g. exp(2j * pi * f1 * n).</span>"));
     hf->addWidget(new QLabel("x[n] =", this));
     hf->addWidget(m_formula, 1);
     lay->addWidget(m_wdg_formula);
@@ -198,6 +228,9 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     vt->addLayout(ct);
     m_plot_t = new PlotWidget(this);
     vt->addWidget(m_plot_t, 1);
+    m_plot_ti = new PlotWidget(this);  // imaginary parts of complex signals
+    m_plot_ti->setVisible(false);
+    vt->addWidget(m_plot_ti, 1);
     m_tabs->addTab(wt, tr("Time"));
 
     auto *wf = new QWidget(this);
@@ -311,6 +344,7 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     for (QCheckBox *c : {m_t_db, m_f_db})
         connect(c, &QCheckBox::toggled, this, [this] {
             m_plot_t->keepView(false);
+            m_plot_ti->keepView(false);
             m_plot_f->keepView(false);
             redrawNow();
         });
@@ -398,13 +432,17 @@ bool TranView::loadStimFile(const QString &file_name) {
         return false;
     }
     m_file_raw = t.column(size_t(col));
+    m_file_raw_im = t.column_complex(size_t(col)) ? t.column_imag(size_t(col)) : Vec();
     for (double &v : m_file_raw)
         if (!std::isfinite(v)) v = 0;  // empty / non-numeric cells
+    for (double &v : m_file_raw_im)
+        if (!std::isfinite(v)) v = 0;
     m_p.file_name = QFileInfo(file_name).fileName().toStdString();
     m_file_lbl->setText(tr("%1: %2 samples, column '%3'")
                             .arg(QFileInfo(file_name).fileName())
                             .arg(m_file_raw.size())
-                            .arg(QString::fromStdString(t.names[size_t(col)])));
+                            .arg(QString::fromStdString(t.names[size_t(col)])) +
+                        (m_file_raw_im.empty() ? QString() : tr(", complex")));
     m_file_lbl->setToolTip(file_name);
     Logger::info(tr("Loaded %1 samples from '%2' as stimulus.").arg(m_file_raw.size()).arg(file_name));
     applyFileNorm();
@@ -420,13 +458,18 @@ bool TranView::loadStimFile(const QString &file_name) {
 void TranView::applyFileNorm() {
     if (m_file_raw.empty()) return;
     auto x = std::make_shared<Vec>(m_file_raw);
+    auto xi = m_file_raw_im.empty() ? nullptr : std::make_shared<Vec>(m_file_raw_im);
     if (m_file_norm->isChecked()) {
-        double mx = 0;
-        for (double v : *x) mx = std::max(mx, std::fabs(v));
-        if (mx > 0)
+        double mx = 0;  // max. |x|, also for complex data
+        for (size_t i = 0; i < x->size(); ++i) mx = std::max(mx, std::hypot((*x)[i], xi ? (*xi)[i] : 0.0));
+        if (mx > 0) {
             for (double &v : *x) v /= mx;
+            if (xi)
+                for (double &v : *xi) v /= mx;
+        }
     }
     m_p.x_file = x;
+    m_p.x_file_im = xi;
 }
 
 void TranView::setFormula(const QString &formula) {
@@ -475,6 +518,10 @@ void TranView::updateEdits() {
     };
     set("a1", m_p.a1);
     set("a2", m_p.a2);
+    set("dc", m_p.dc);
+    m_edits["a1"]->setText(fmtCplx(m_p.a1, m_p.a1_im));
+    m_edits["a2"]->setText(fmtCplx(m_p.a2, m_p.a2_im));
+    m_edits["dc"]->setText(fmtCplx(m_p.dc, m_p.dc_im));
     set("phi1", m_p.phi1);
     set("phi2", m_p.phi2);
     set("f1", m_p.f1);
@@ -486,8 +533,7 @@ void TranView::updateEdits() {
     set("bw2", m_p.bw2);
     set("duty", m_p.duty);
     set("n1", m_p.n1);
-    set("dc", m_p.dc);
-    m_noi->setText(fmt(m_p.noi));
+    m_noi->setText(fmtCplx(m_p.noi, m_p.noi_im));
     const QString fu = m_ctx.f_label;
     for (const QString &k : F_KEYS) m_edits[k]->setToolTip(m_edits[k]->toolTip().section(" (", 0, 0) + " (" + fu + ")");
     const QString tu = m_ctx.unit_to_hz == 0 ? tr("samples") : m_ctx.t_label;
@@ -510,8 +556,18 @@ void TranView::readEdits() {
         else if (T_KEYS.contains(k)) v *= fs;
         target = v;
     };
-    get("a1", m_p.a1);
-    get("a2", m_p.a2);
+    auto getc = [&](const QString &k, double &re, double &im) {
+        QLineEdit *e = m_edits[k];
+        if (!parseCplx(e, re, im)) {
+            e->setStyleSheet("QLineEdit {background: #ffd0d0}");
+            all_ok = false;
+            return;
+        }
+        e->setStyleSheet(QString());
+    };
+    getc("a1", m_p.a1, m_p.a1_im);
+    getc("a2", m_p.a2, m_p.a2_im);
+    getc("dc", m_p.dc, m_p.dc_im);
     get("phi1", m_p.phi1);
     get("phi2", m_p.phi2);
     get("f1", m_p.f1);
@@ -522,12 +578,14 @@ void TranView::readEdits() {
     get("bw1", m_p.bw1);
     get("bw2", m_p.bw2);
     get("duty", m_p.duty);
-    get("dc", m_p.dc);
     double n1 = m_p.n1;
     get("n1", n1);
     m_p.n1 = std::max(1, int(std::lround(n1)));
-    double noi = m_p.noi;
-    if (parse(m_noi, noi)) m_p.noi = noi;
+    double noi = m_p.noi, noi_im = m_p.noi_im;
+    if (parseCplx(m_noi, noi, noi_im)) {
+        m_p.noi = noi;
+        m_p.noi_im = noi_im;
+    }
     if (!all_ok) Logger::warning(tr("Invalid stimulus parameter, the previous value is used."));
     changed();
 }
@@ -535,7 +593,9 @@ void TranView::readEdits() {
 void TranView::changed() {
     m_dirty = true;
     m_plot_t->keepView(false);
+    m_plot_ti->keepView(false);
     m_plot_f->keepView(false);
+    m_plot_s->keepView(false);
     if (isVisible()) redrawNow();
     else m_needs_redraw = true;
 }
@@ -550,6 +610,10 @@ void TranView::calc() {
     m_error.clear();
     m_x.clear();
     m_y.clear();
+    m_xi.clear();
+    m_yi.clear();
+    m_yi_float.clear();
+    m_cmplx = false;
     if (!m_design) return;
     int N = m_N->value();
     if (N == 0) N = std::max(100, m_design->fir ? int(m_design->ba.b.size()) + 5 : impz_len(m_design->zpk));
@@ -559,24 +623,51 @@ void TranView::calc() {
     m_p.f_s = m_ctx.f_s;
     m_formula->setStyleSheet(QString());
     try {
-        m_x = calc_stimulus(m_p, n_end);
+        const CVec xc = calc_stimulus_c(m_p, n_end, &m_cmplx);
+        m_x.resize(xc.size());
+        for (size_t i = 0; i < xc.size(); ++i) m_x[i] = xc[i].real();
+        if (m_cmplx) {
+            m_xi.resize(xc.size());
+            for (size_t i = 0; i < xc.size(); ++i) m_xi[i] = xc[i].imag();
+        }
     } catch (const std::exception &e) {
         m_error = e.what();
         Logger::warning(m_error);
         if (m_p.stim == Stim::Formula) m_formula->setStyleSheet("QLineEdit {background: #ffd0d0}");
         m_x.clear();
+        m_cmplx = false;
+        m_lbl_cmplx->setVisible(false);
         return;
     }
-    m_y = m_design->sos.empty() ? lfilter(m_design->ba.b, m_design->ba.a, m_x) : sosfilt(m_design->sos, m_x);
+    m_lbl_cmplx->setVisible(m_cmplx);
+    // the coefficients are real: real and imaginary parts are filtered separately
+    auto filt = [&](const Vec &x) {
+        return m_design->sos.empty() ? lfilter(m_design->ba.b, m_design->ba.a, x) : sosfilt(m_design->sos, x);
+    };
+    m_y = filt(m_x);
+    if (m_cmplx) m_yi = filt(m_xi);
     m_y_float.clear();
     m_fx_info.clear();
     if (m_fx_on) {
         try {
-            const FxResult r = m_design->fir ? fx_filter_fir(m_design->ba.b, m_fx, m_x) : fx_filter_sos(m_design->sos, m_fx, m_x);
+            auto fx = [&](const Vec &x) {
+                return m_design->fir ? fx_filter_fir(m_design->ba.b, m_fx, x) : fx_filter_sos(m_design->sos, m_fx, x);
+            };
+            FxResult r = fx(m_x);
             m_y_float = m_y;
             m_y = r.y;
             double err = 0;
             for (size_t i = size_t(m_n_start); i < m_y.size(); ++i) err = std::max(err, std::fabs(m_y[i] - m_y_float[i]));
+            if (m_cmplx) {  // two real fixpoint filters for the real and the imaginary part
+                const FxResult ri = fx(m_xi);
+                m_yi_float = m_yi;
+                m_yi = ri.y;
+                r.n_over_i += ri.n_over_i;
+                r.n_over_acc += ri.n_over_acc;
+                r.n_over_o += ri.n_over_o;
+                for (size_t i = size_t(m_n_start); i < m_yi.size(); ++i)
+                    err = std::max(err, std::fabs(m_yi[i] - m_yi_float[i]));
+            }
             m_fx_info = tr("Fixpoint: overflows input %1, accumulator %2, output %3, coefficients %4; "
                            "max. |y - y_float| = %5")
                             .arg(r.n_over_i)
@@ -617,7 +708,8 @@ void TranView::drawSpgr() {
         return;
     }
     const bool use_y = m_s_sig->currentIndex() == 0;
-    const Vec s(use_y ? m_y.begin() + m_n_start : m_x.begin() + m_n_start, use_y ? m_y.end() : m_x.end());
+    const Vec &sr = use_y ? m_y : m_x, &si = use_y ? m_yi : m_xi;
+    const Vec s(sr.begin() + m_n_start, sr.end());
     const int N = int(s.size());
     int nfft = m_s_nfft->value(), novl = m_s_ovlp->value();
     // like pyfda: NFFT <= N and N_OVLP < NFFT
@@ -630,7 +722,14 @@ void TranView::drawSpgr() {
     const SpgrMode mode = mode_i == 0 ? SpgrMode::PSD : mode_i == 1 ? SpgrMode::Magnitude : SpgrMode::Angle;
     Spectrogram sp;
     try {
-        sp = spectrogram(s, m_ctx.f_s, fft_window(wi.type, nfft, par), novl, mode, true);
+        const Vec win = fft_window(wi.type, nfft, par);
+        if (m_cmplx) {  // two-sided
+            CVec c(s.size());
+            for (size_t i = 0; i < s.size(); ++i) c[i] = cplx(s[i], si[size_t(m_n_start) + i]);
+            sp = spectrogram(c, m_ctx.f_s, win, novl, mode, true);
+        } else {
+            sp = spectrogram(s, m_ctx.f_s, win, novl, mode, true);
+        }
     } catch (const std::exception &e) {
         m_plot_s->setMessage(e.what());
         m_plot_s->autoscale();
@@ -669,7 +768,8 @@ void TranView::drawSpgr() {
     const QString zl = mode == SpgrMode::PSD ? QString("S_%1%1 / %2").arg(sym.toLower(), log ? "dB re W/Hz" : "W/Hz")
                        : mode == SpgrMode::Magnitude ? QString("|%1| / %2").arg(sym, log ? "dBV" : "V")
                                                      : QString::fromUtf8("∠%1 / rad").arg(sym);
-    m_plot_s->setImage(img, t0 - dt / 2, t0 + (nt - 0.5) * dt, -df / 2, (nf - 0.5) * df, zmin, zmax, zl);
+    const double f0 = sp.f.front();
+    m_plot_s->setImage(img, t0 - dt / 2, t0 + (nt - 0.5) * dt, f0 - df / 2, f0 + (nf - 0.5) * df, zmin, zmax, zl);
     m_plot_s->setTitle(tr("Spectrogram of %1, %2 window, NFFT = %3, N_OVLP = %4")
                            .arg(use_y ? "y[n]" : "x[n]", wi.name)
                            .arg(nfft)
@@ -679,7 +779,10 @@ void TranView::drawSpgr() {
 
 void TranView::drawTime() {
     m_plot_t->clear();
+    m_plot_ti->clear();
     m_plot_t->setXLabel(m_ctx.t_label);
+    m_plot_ti->setXLabel(m_ctx.t_label);
+    m_plot_ti->setVisible(m_cmplx && !m_x.empty());
     if (m_x.empty()) {
         m_plot_t->setMessage(m_error.isEmpty() ? tr("No filter designed") : m_error);
         m_plot_t->autoscale();
@@ -688,31 +791,42 @@ void TranView::drawTime() {
     const bool log = m_t_db->isChecked();
     const bool norm = m_ctx.unit_to_hz == 0;
     const int n_end = int(m_x.size());
-    QVector<double> t, x, y;
-    for (int n = m_n_start; n < n_end; ++n) {
-        t << (norm ? n : n / m_ctx.f_s);
-        x << (log ? db(m_x[size_t(n)]) : m_x[size_t(n)]);
-        y << (log ? db(m_y[size_t(n)]) : m_y[size_t(n)]);
-    }
+    QVector<double> t;
+    for (int n = m_n_start; n < n_end; ++n) t << (norm ? n : n / m_ctx.f_s);
+    auto data = [&](const Vec &v) {
+        QVector<double> d;
+        for (int n = m_n_start; n < n_end; ++n) d << (log ? db(v[size_t(n)]) : v[size_t(n)]);
+        return d;
+    };
     const bool step_err = m_p.stim == Stim::Step && m_step_err->isChecked();
-    if (m_t_stim->isChecked()) m_plot_t->addCurve(t, x, PlotWidget::color(1), "x[n]", PlotWidget::Style::Line);
-    if (m_t_resp->isChecked() && !m_y_float.empty()) {
-        PlotWidget::Curve c;
-        c.x = t;
-        for (int n = m_n_start; n < n_end; ++n) c.y << (log ? db(m_y_float[size_t(n)]) : m_y_float[size_t(n)]);
-        c.color = PlotWidget::color(2);
-        c.name = "y_float[n]";
-        c.pen = Qt::DashLine;
-        m_plot_t->addCurve(c);
-    }
-    if (m_t_resp->isChecked())
-        m_plot_t->addCurve(t, y, PlotWidget::color(0),
-                           (step_err ? QString::fromUtf8("ε[n]") : QString("y[n]")) + (m_y_float.empty() ? "" : " (fixpoint)"),
-                           log || t.size() > 300 ? PlotWidget::Style::Line : PlotWidget::Style::Stem);
+    // real part (or real signal) in the upper plot, imaginary part in the lower one like pyfda
+    auto draw = [&](PlotWidget *p, const Vec &x, const Vec &y, const Vec &y_float, const QString &part) {
+        auto name = [&](const QString &s) { return part.isEmpty() ? s : QString("%1{%2}").arg(part, s); };
+        if (m_t_stim->isChecked()) p->addCurve(t, data(x), PlotWidget::color(1), name("x[n]"), PlotWidget::Style::Line);
+        if (m_t_resp->isChecked() && !y_float.empty()) {
+            PlotWidget::Curve c;
+            c.x = t;
+            c.y = data(y_float);
+            c.color = PlotWidget::color(2);
+            c.name = name("y_float[n]");
+            c.pen = Qt::DashLine;
+            p->addCurve(c);
+        }
+        if (m_t_resp->isChecked())
+            p->addCurve(t, data(y), PlotWidget::color(0),
+                        name(step_err ? QString::fromUtf8("ε[n]") : QString("y[n]")) + (y_float.empty() ? "" : " (fixpoint)"),
+                        log || t.size() > 300 ? PlotWidget::Style::Line : PlotWidget::Style::Stem);
+        const QString unit = log ? tr("Magnitude / dB") : tr("Amplitude");
+        p->setYLabel(part.isEmpty() ? unit : QString("%1 %2").arg(part == "Re" ? tr("Real part,") : tr("Imag. part,"), unit));
+        p->setYLimits(log ? -80 : NaN, NaN);
+    };
+    draw(m_plot_t, m_x, m_y, m_y_float, m_cmplx ? "Re" : "");
     m_plot_t->setTitle((m_y_float.empty() ? QString() : tr("Fixpoint ")) + QString::fromStdString(stim_title(m_p, step_err)));
-    m_plot_t->setYLabel(log ? tr("Magnitude / dB") : tr("Amplitude"));
-    m_plot_t->setYLimits(log ? -80 : NaN, NaN);
     m_plot_t->autoscale();
+    if (m_cmplx) {
+        draw(m_plot_ti, m_xi, m_yi, m_yi_float, "Im");
+        m_plot_ti->autoscale();
+    }
 }
 
 void TranView::drawFreq() {
@@ -725,16 +839,22 @@ void TranView::drawFreq() {
         return;
     }
     const int N = int(m_x.size()) - m_n_start;
-    const Vec xs(m_x.begin() + m_n_start, m_x.end()), ys(m_y.begin() + m_n_start, m_y.end());
     const auto &wi = window_list()[m_win->currentIndex()];
     double par = wi.par_default;
     if (wi.par_name && !parse(m_win_par, par)) par = wi.par_default;
     const Vec win = fft_window(wi.type, N, par);
     const double cgain = window_cgain(win), nenbw = window_nenbw(win);
-    const CVec X = windowed_fft(xs, win), Y = windowed_fft(ys, win);
+    auto spectrum = [&](const Vec &re, const Vec &im) {
+        if (!m_cmplx) return windowed_fft(Vec(re.begin() + m_n_start, re.end()), win);
+        CVec c(static_cast<size_t>(N));
+        for (int i = 0; i < N; ++i) c[size_t(i)] = cplx(re[size_t(m_n_start + i)], im[size_t(m_n_start + i)]);
+        return windowed_fft(c, win);
+    };
+    const CVec X = spectrum(m_x, m_xi), Y = spectrum(m_y, m_yi);
 
     // frequency response from an impulse: scale by N * cgain / energy of the impulse
-    const bool freq_resp = m_f_norm->isVisible() && m_f_norm->isChecked() && m_p.noise == Noise::None && m_p.dc == 0;
+    const bool freq_resp =
+        m_f_norm->isVisible() && m_f_norm->isChecked() && m_p.noise == Noise::None && m_p.dc == 0 && m_p.dc_im == 0;
     const double s_imp = impulse_scale(m_p);
     const double scale = freq_resp && s_imp > 0 && std::isfinite(s_imp) ? N * cgain / s_imp : 1.0;
     if (freq_resp && wi.type != WindowType::Rectangular)
@@ -745,14 +865,18 @@ void TranView::drawFreq() {
         return p * (freq_resp ? scale : 1.0) / nenbw;
     };
     const double p_x = power(X), p_y = power(Y);
-    // single-sided display: 0 ... f_S / 2
-    const CVec Xd = freq_resp ? CVec(X.begin(), X.begin() + (N / 2 + 1)) : ssb_spectrum(X);
-    const CVec Yd = freq_resp ? CVec(Y.begin(), Y.begin() + (N / 2 + 1)) : ssb_spectrum(Y);
+    // single-sided display 0 ... f_S / 2, two-sided -f_S / 2 ... f_S / 2 for complex signals
+    auto display = [&](const CVec &S) {
+        if (m_cmplx) return fftshift(S);
+        return freq_resp ? CVec(S.begin(), S.begin() + (N / 2 + 1)) : ssb_spectrum(S);
+    };
+    const CVec Xd = display(X), Yd = display(Y);
+    const int k0 = m_cmplx ? N / 2 : 0;  // index of f = 0
     const bool log = m_f_db->isChecked();
     auto curve = [&](const CVec &S) {
         QVector<double> f, a;
         for (size_t k = 0; k < S.size(); ++k) {
-            f << double(k) * m_ctx.f_s / N;
+            f << (double(k) - k0) * m_ctx.f_s / N;
             const double m = std::abs(S[k]) * scale;
             a << (log ? db(m) : m);
         }
@@ -774,9 +898,11 @@ void TranView::drawFreq() {
         const int n = 2048;
         Vec w(n);
         QVector<double> f(n), a(n);
+        const double w0 = m_cmplx ? -PI : 0;  // two-sided for complex signals
+        const double span = m_cmplx ? 2 * PI : PI;
         for (int i = 0; i < n; ++i) {
-            w[size_t(i)] = PI * i / (n - 1);
-            f[i] = m_ctx.f_s / 2 * i / (n - 1);
+            w[size_t(i)] = w0 + span * i / (n - 1);
+            f[i] = w[size_t(i)] / (2 * PI) * m_ctx.f_s;
         }
         const CVec H = m_design->sos.empty() ? freqz(m_design->ba, w) : freqz(m_design->sos, w);
         for (int i = 0; i < n; ++i) a[i] = log ? db(std::abs(H[size_t(i)])) : std::abs(H[size_t(i)]);
@@ -816,9 +942,16 @@ bool TranView::saveCsv(const QString &file_name) {
     const QChar d(fmt.delimiter);
     auto num = [&](double v) { return QString::fromStdString(csv_number(v, fmt)); };
     QTextStream s(&f);
-    s << "n" << d << "t" << d << "x" << d << "y\n";
-    for (size_t n = size_t(m_n_start); n < m_x.size(); ++n)
-        s << n << d << num(double(n) / m_ctx.f_s) << d << num(m_x[n]) << d << num(m_y[n]) << "\n";
+    if (m_cmplx) {  // real and imaginary parts in separate columns
+        s << "n" << d << "t" << d << "x_re" << d << "x_im" << d << "y_re" << d << "y_im\n";
+        for (size_t n = size_t(m_n_start); n < m_x.size(); ++n)
+            s << n << d << num(double(n) / m_ctx.f_s) << d << num(m_x[n]) << d << num(m_xi[n]) << d << num(m_y[n]) << d
+              << num(m_yi[n]) << "\n";
+    } else {
+        s << "n" << d << "t" << d << "x" << d << "y\n";
+        for (size_t n = size_t(m_n_start); n < m_x.size(); ++n)
+            s << n << d << num(double(n) / m_ctx.f_s) << d << num(m_x[n]) << d << num(m_y[n]) << "\n";
+    }
     Logger::info(tr("Exported transient data to '%1'.").arg(file_name));
     return true;
 }

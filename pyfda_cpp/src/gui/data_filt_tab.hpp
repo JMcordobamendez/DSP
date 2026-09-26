@@ -50,4 +50,5 @@ private:
     QString m_file_name;
     pyfda::Vec m_x;                  // selected data column
     std::optional<pyfda::Vec> m_y;   // filtered data
+    pyfda::Vec m_xi, m_yi;           // imaginary parts of complex data, empty for real data
 };

@@ -177,7 +177,8 @@ StimParams parse_stim(std::istringstream &in) {
         const std::map<std::string, double *> nums = {{"a1", &p.a1},   {"a2", &p.a2},   {"f1", &p.f1},   {"f2", &p.f2},
                                                       {"phi1", &p.phi1}, {"phi2", &p.phi2}, {"t1", &p.t1}, {"t2", &p.t2},
                                                       {"tw", &p.tw},   {"bw1", &p.bw1}, {"bw2", &p.bw2}, {"duty", &p.duty},
-                                                      {"noi", &p.noi}, {"dc", &p.dc}};
+                                                      {"noi", &p.noi}, {"dc", &p.dc}, {"a1_im", &p.a1_im},
+                                                      {"a2_im", &p.a2_im}, {"noi_im", &p.noi_im}, {"dc_im", &p.dc_im}};
         if (auto it = nums.find(k); it != nums.end()) *it->second = std::stod(v);
         else if (k == "stim") {
             bool found = false;
@@ -348,7 +349,8 @@ std::string run(const std::string &line) {
         for (size_t i = 0; i < t.names.size(); ++i) names += (i ? "," : "") + str(t.names[i]);
         names += "]";
         return "{\"rows\":" + std::to_string(t.n_rows) + ",\"cols\":" + std::to_string(t.n_cols) +
-               ",\"names\":" + names + ",\"values\":" + arr(t.values) + ",\"fs\":" + num(t.fs) + "}";
+               ",\"names\":" + names + ",\"values\":" + arr(t.values) + ",\"imag\":" + arr(t.imag) +
+               ",\"fs\":" + num(t.fs) + "}";
     }
     if (cmd == "design") {
         const FilterDesign d = design_filter(parse_spec(in));
@@ -388,8 +390,15 @@ std::string run(const std::string &line) {
         int n;
         in >> n;
         const StimParams p = parse_stim(in);
-        return "{\"x\":" + arr(calc_stimulus(p, n)) + ",\"title\":" + str(stim_title(p)) + ",\"scale\":" +
-               num(impulse_scale(p)) + "}";
+        bool cmplx = false;
+        const CVec x = calc_stimulus_c(p, n, &cmplx);
+        Vec xr, xi;
+        for (const cplx &v : x) {
+            xr.push_back(v.real());
+            xi.push_back(v.imag());
+        }
+        return "{\"x\":" + arr(xr) + ",\"xi\":" + arr(xi) + ",\"complex\":" + (cmplx ? "true" : "false") +
+               ",\"title\":" + str(stim_title(p)) + ",\"scale\":" + num(impulse_scale(p)) + "}";
     }
     if (cmd == "wprops") {  // wprops <window> <N> <par>
         std::string w;
@@ -423,23 +432,38 @@ std::string run(const std::string &line) {
         const AmpUnit au = u == "V" ? AmpUnit::V : u == "W" ? AmpUnit::W : AmpUnit::dB;
         return "{\"v\":" + num(dir == "to" ? amp_to_db(v, au, fir, pb) : amp_from_db(v, au, fir, pb)) + "}";
     }
-    if (cmd == "spgr") {  // spgr <psd|magnitude|angle> <density 0/1> <fs> <window> <par> <nperseg> <noverlap> <x>
-        std::string mode, w, x;
+    if (cmd == "spgr") {  // spgr <psd|magnitude|angle> <density 0/1> <fs> <window> <par> <nperseg> <noverlap> <x> [<x imag>]
+        std::string mode, w, x, xi;
         int dens, nper, novl;
         double fs, par;
-        in >> mode >> dens >> fs >> w >> par >> nper >> novl >> x;
+        in >> mode >> dens >> fs >> w >> par >> nper >> novl >> x >> xi;
         const SpgrMode m = mode == "psd" ? SpgrMode::PSD : mode == "magnitude" ? SpgrMode::Magnitude : SpgrMode::Angle;
-        const Spectrogram r = spectrogram(list(x), fs, fft_window(win_type(w), nper, par), novl, m, dens == 1);
+        const Vec win = fft_window(win_type(w), nper, par);
+        Spectrogram r;
+        if (xi.empty()) {
+            r = spectrogram(list(x), fs, win, novl, m, dens == 1);
+        } else {
+            const Vec re = list(x), im = list(xi);
+            CVec xc(re.size());
+            for (size_t i = 0; i < re.size(); ++i) xc[i] = cplx(re[i], im[i]);
+            r = spectrogram(xc, fs, win, novl, m, dens == 1);
+        }
         std::string s = "[";
         for (size_t i = 0; i < r.s.size(); ++i) s += (i ? "," : "") + arr(r.s[i]);
         return "{\"f\":" + arr(r.f) + ",\"t\":" + arr(r.t) + ",\"s\":" + s + "]}";
     }
-    if (cmd == "wfft") {
-        std::string w, x;
+    if (cmd == "wfft") {  // wfft <window> <par> <x> [<x imag>]
+        std::string w, x, xi;
         double par;
-        in >> w >> par >> x;
+        in >> w >> par >> x >> xi;
         const Vec xv = list(x);
         const Vec win = fft_window(win_type(w), int(xv.size()), par);
+        if (!xi.empty()) {
+            const Vec im = list(xi);
+            CVec xc(xv.size());
+            for (size_t i = 0; i < xv.size(); ++i) xc[i] = cplx(xv[i], im[i]);
+            return "{\"X\":" + carr(windowed_fft(xc, win)) + ",\"shifted\":" + carr(fftshift(windowed_fft(xc, win))) + "}";
+        }
         return "{\"win\":" + arr(win) + ",\"X\":" + carr(windowed_fft(xv, win)) + ",\"ssb\":" +
                carr(ssb_spectrum(windowed_fft(xv, win))) + ",\"cgain\":" + num(window_cgain(win)) + ",\"nenbw\":" +
                num(window_nenbw(win)) + "}";

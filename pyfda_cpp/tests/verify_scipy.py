@@ -412,6 +412,26 @@ with tempfile.TemporaryDirectory() as tmp:
     np.save(fn, np.arange(12.).reshape(4, 3))
     r = call(f"csv {fn}")
     check("npy", r.get('rows') == 4 and r.get('cols') == 3 and r['values'] == list(np.arange(12.)), f"{r}")
+    # complex data: npy complex128 / complex64, numpy.savetxt, Python and Matlab notation
+    zc = (np.arange(10.) - 3) * (0.5 - 1.25j) + 0.1j
+    for dt in (np.complex128, np.complex64):
+        np.save(fn, np.column_stack((np.arange(10.), zc)).astype(dt))
+        r = call(f"csv {fn}")
+        z = np.column_stack((np.arange(10.), zc)).astype(dt).ravel()
+        check(f"npy {np.dtype(dt).name}", r.get('rows') == 10 and r['values'] == list(z.real.astype(float))
+              and r['imag'] == list(z.imag.astype(float)), f"{str(r)[:200]}")
+    fn = os.path.join(tmp, "c.csv")
+    np.savetxt(fn, np.column_stack((np.arange(10.), zc)), delimiter=",", header="t,z", comments="")
+    r = call(f"csv {fn}")
+    v = np.array(r.get('values', [])).reshape(-1, 2) + 1j * np.array(r.get('imag', [])).reshape(-1, 2)
+    check("csv numpy.savetxt complex", r.get('names') == ["t", "z"] and np.allclose(v[:, 1], zc, rtol=1e-15)
+          and np.allclose(v[:, 0].real, np.arange(10.)), f"{str(r)[:300]}")
+    with open(fn, "w") as f:
+        f.write("n;x\n0;1+2j\n1;-2.5e-3-1e2j\n2;3j\n3;(4-j)\n4;1,5+2,5i\n5;7\n")
+    r = call(f"csv {fn}")
+    v = np.array(r.get('values', [])).reshape(-1, 2) + 1j * np.array(r.get('imag', [])).reshape(-1, 2)
+    check("csv complex notation", r.get('names') == ["n", "x"] and np.allclose(
+        v[:, 1], [1 + 2j, -2.5e-3 - 1e2j, 3j, 4 - 1j, 1.5 + 2.5j, 7]), f"{str(r)[:300]}")
 
 # ---------------------------------------------------------------------------
 # filter files (JSON) and coefficient export: everything must read back exactly
@@ -625,6 +645,13 @@ for w, par in [("rectangular", 0), ("hann", 0), ("kaiser", 8), ("flattop", 0)]:
     close(f"windowed fft {w}", cplx(r['X']), X, 1e-12, 1e-14)
     close(f"ssb {w}", cplx(r['ssb']), np.insert(X[1:32] * 2, 0, X[0]), 1e-12, 1e-14)
     close(f"nenbw {w}", [r['nenbw']], [64 * np.sum(win**2) / np.sum(win)**2], 1e-12)
+for N in (64, 63):
+    xc = np.exp(2j * np.pi * -0.2 * np.arange(N)) + 0.3j
+    r = call(f"wfft hann 0 {L(xc.real)} {L(xc.imag)}")
+    win = sig.get_window("hann", N)
+    X = np.fft.fft(xc * win / np.mean(win)) / N
+    close(f"complex windowed fft {N}", cplx(r['X']), X, 1e-12, 1e-14)
+    close(f"fftshift {N}", cplx(r['shifted']), np.fft.fftshift(X), 1e-12, 1e-14)
 
 # ---------------------------------------------------------------------------
 # fixpoint: reference = pyfda.libs.pyfda_fix_lib.Fixed.fixp() ('qfrac'), rewritten
@@ -876,9 +903,49 @@ for fo in formulas:
     else:
         ref = eval(fo, {k: getattr(np, k) for k in dir(np) if not k.startswith('_')}, ld)
     close(f"formula {fo}", r['x'], np.broadcast_to(ref, n.shape), 1e-12, 1e-14)
-for bad in ("sin(n", "foo(n)", "n +* 2", "q * 2", "3 * j", ""):
+for bad in ("sin(n", "foo(n)", "n +* 2", "q * 2", "3 * jj", "real(n, 2)", ""):
     r = call(f"stim 8 formula={bad}")
     check(f"formula error '{bad}'", 'error' in r, str(r)[:100])
+
+# ---- complex stimuli (pyfda: "exp" stimulus, complex amplitudes / DC / noise, formulas with j) ----
+cformulas = [
+    "A1 * exp(2j * pi * f1 * n)",
+    "sqrt(-1 + 0j) * n + j * 2 + 1.5J",
+    "exp(1j * n / 7) ** 3 - conj(exp(1j * n / 5)) * (1 - 2j)",
+    "sin(n + 1j) + cos(1j * n / 30) + log(-n - 1 + 0j) + tanh(n / 10 + 0.3j)",
+    "abs(exp(1j * n)) + real(n * (2 - 1j)) + imag(n * (2 - 1j)) * 1j + complex(n, -n)",
+    "where(n < T1, 1j, -1) + (n + 1j) ** 0.5 + (n - 3j) ** -2",
+]
+for fo in cformulas:
+    r = call(f"stim 64 a1=0.7 a1_im=-0.2 f1=0.03 t1=12 formula={fo}")
+    n = np.arange(64, dtype=float)
+    ld = dict(A1=0.7 - 0.2j, f1=0.03, T1=12.0, n=n, j=1j, pi=np.pi)
+    env = {k: getattr(np, k) for k in dir(np) if not k.startswith('_')}
+    env['complex'] = lambda a, b: a + 1j * b
+    ref = eval(fo, env, ld)  # numpy, numexpr doesn't accept all of these literals
+    ref = np.broadcast_to(ref, n.shape)
+    check(f"complex formula flag {fo}", r['complex'] is True, str(r)[:100])
+    close(f"complex formula {fo}", np.array(r['x']) + 1j * np.array(r['xi']), ref, 1e-12, 1e-13)
+n = np.arange(50)
+r = call("stim 50 stim=exp a1=0.5 a1_im=0.5 a2=0.2 f1=0.05 f2=-0.13 phi1=30 phi2=-45 dc=0.1 dc_im=-0.3")
+ref = (0.5 + 0.5j) * np.exp(1j * (2 * np.pi * n * 0.05 + np.pi / 6)) + 0.2 * np.exp(1j * (2 * np.pi * n * -0.13 - np.pi / 4)) \
+    + 0.1 - 0.3j
+close("exp stimulus", np.array(r['x']) + 1j * np.array(r['xi']), ref, 1e-12, 1e-14)
+check("exp stimulus is complex", r['complex'] is True and r["title"].startswith("Complex Exponential Stimulus"), str(r)[:100])
+r = call("stim 50 stim=am a1=1 a1_im=2 a2=0.5 a2_im=-1 f1=0.05 f2=0.01")
+ref = (1 + 2j) * np.sin(2 * np.pi * n * 0.05) * (0.5 - 1j) * np.sin(2 * np.pi * n * 0.01)
+close("am complex amplitudes", np.array(r['x']) + 1j * np.array(r['xi']), ref, 1e-12, 1e-14)
+r = call("stim 50 stim=pmfm a1=1 a2=0.5 a2_im=0.2 f1=0.05 f2=0.01")
+ref = np.sin(2 * np.pi * n * 0.05 + (0.5 + 0.2j) * np.sin(2 * np.pi * n * 0.01))
+close("pm complex modulation index", np.array(r['x']) + 1j * np.array(r['xi']), ref, 1e-12, 1e-14)
+r_re = call("stim 400 stim=sine a1=0 noise=gauss noi=0.5")
+r_c = call("stim 400 stim=sine a1=0 noise=gauss noi=0.5 noi_im=2")
+check("complex noise: same real part", r_c['x'] == r_re['x'] and r_c['complex'] is True and r_re['complex'] is False)
+check("complex noise: imaginary std", 1.7 < np.std(r_c['xi']) < 2.3, f"{np.std(r_c['xi'])}")
+r = call("stim 20 stim=sine a1=1 a2=0 a2_im=1 f1=0.1")  # a2 = 1j but only multiplied with 0 ... still complex
+check("complex amplitude sets complex flag", r['complex'] is True and max(map(abs, r['xi'])) > 0.5, str(r)[:100])
+r = call("stim 20 stim=step a1=1 a2_im=1")  # A2 is not used by the step
+check("unused complex amplitude is ignored", r['complex'] is False, str(r)[:100])
 
 # ---- spectrogram (scipy.signal.spectrogram, detrend='constant', one-sided) ----
 xs = np.sin(2 * np.pi * 0.05 * np.arange(700) ** 1.3 / 30) + 0.2 * rng.normal(size=700) + 0.3
@@ -902,6 +969,16 @@ for mode in ("psd", "magnitude", "angle"):
                 check(name, got.shape == S.shape and np.allclose(np.exp(1j * got[m]), np.exp(1j * S[m]), atol=1e-8))
             else:
                 close(name, got, S, 1e-9)
+# complex data: two-sided spectrogram (return_onesided=False), shifted to -fs/2 ... fs/2
+xc = xs * np.exp(2j * np.pi * 0.1 * np.arange(700)) + 0.1j
+for mode in ("psd", "magnitude"):
+    for wname, nper, novl in (("hann", 64, 32), ("hann", 65, 20)):
+        f, t, S = sig.spectrogram(xc, 2.0, window=sig.get_window(wname, nper), nperseg=nper, noverlap=novl,
+                                  detrend='constant', return_onesided=False, mode=mode)
+        r = call(f"spgr {mode} 1 2 {wname} 0 {nper} {novl} {L(xc.real)} {L(xc.imag)}")
+        name = f"complex spectrogram {mode} {nper}/{novl}"
+        close(name + " f", r['f'], np.fft.fftshift(f), 1e-12)
+        close(name, np.array(r['s']).T, np.fft.fftshift(S, axes=0), 1e-9)
 
 # ---- amplitude units (pyfda special_functions.unit2lin / lin2unit) ----
 def lin2unit(lin, fir, pb, unit):

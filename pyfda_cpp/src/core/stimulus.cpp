@@ -24,6 +24,7 @@ const std::vector<StimInfo> &stim_list() {
         {Stim::Step, "step", "Step", "a1 t1"},
         {Stim::Sine, "sine", "Sine", "a1 a2 phi1 phi2 f1 f2 dc"},
         {Stim::Cos, "cos", "Cos", "a1 a2 phi1 phi2 f1 f2 dc"},
+        {Stim::Exp, "exp", "Exp (complex)", "a1 a2 phi1 phi2 f1 f2 dc"},
         {Stim::Diric, "diric", "Diric", "a1 t1 n1 f1 dc"},
         {Stim::Chirp, "chirp", "Chirp", "a1 phi1 f1 f2 t2 dc"},
         {Stim::Triang, "triang", "Triangle", "a1 phi1 f1 bl dc"},
@@ -214,9 +215,14 @@ double impulse_scale(const StimParams &p) {
     }
 }
 
-Vec calc_stimulus(const StimParams &p, int n_end) {
+CVec calc_stimulus_c(const StimParams &p, int n_end, bool *cmplx) {
     if (n_end < 1) throw DesignError("The number of data points must be >= 1.");
-    Vec x(static_cast<size_t>(n_end), 0.0);
+    CVec x(static_cast<size_t>(n_end), 0.0);
+    // complex amplitudes like in pyfda (e.g. A1 = 1 - 3j)
+    const cplx A1(p.a1, p.a1_im), A2(p.a2, p.a2_im);
+    bool c = p.stim == Stim::Exp || (p.stim == Stim::File && p.x_file_im) ||
+             (stim_uses(p.stim, "a1") && p.a1_im != 0) || (stim_uses(p.stim, "a2") && p.a2_im != 0) ||
+             (stim_uses(p.stim, "dc") && p.dc_im != 0) || (p.noise != Noise::None && p.noi_im != 0);
     const double phi1 = p.phi1 / 180 * PI, phi2 = p.phi2 / 180 * PI;
     const int t1_idx = int(std::nearbyint(p.t1));
     auto need_f1 = [&] {
@@ -233,89 +239,94 @@ Vec calc_stimulus(const StimParams &p, int n_end) {
     switch (p.stim) {
     case Stim::None: break;
     case Stim::Dirac:
-        if (t1_idx >= 0 && t1_idx < n_end) x[size_t(t1_idx)] = p.a1;
+        if (t1_idx >= 0 && t1_idx < n_end) x[size_t(t1_idx)] = A1;
         break;
     case Stim::Sinc:
         for (int n = 0; n < n_end; ++n)
-            x[size_t(n)] = p.a1 * sinc(2 * (n - p.t1) * p.f1) + p.a2 * sinc(2 * (n - p.t2) * p.f2);
+            x[size_t(n)] = A1 * sinc(2 * (n - p.t1) * p.f1) + A2 * sinc(2 * (n - p.t2) * p.f2);
         break;
     case Stim::Gauss: {
         if ((p.a1 != 0 && p.f1 < 0) || (p.a2 != 0 && p.f2 < 0))
             throw DesignError("Center frequencies f1, f2 need to be >= 0.");
         const double f1 = p.f1 < 0 ? 0.1 : p.f1, f2 = p.f2 < 0 ? 0.1 : p.f2;
         for (int n = 0; n < n_end; ++n)
-            x[size_t(n)] = p.a1 * gausspulse(n - p.t1, f1, p.bw1) + p.a2 * gausspulse(n - p.t2, f2, p.bw2);
+            x[size_t(n)] = A1 * gausspulse(n - p.t1, f1, p.bw1) + A2 * gausspulse(n - p.t2, f2, p.bw2);
         break;
     }
     case Stim::Rect: {
         const double n_rise = double(int(t1_idx - std::floor(p.tw / 2)));
         const double n_min = std::max(n_rise, 0.0), n_max = std::min(n_rise + p.tw, double(n_end));
-        for (int n = 0; n < n_end; ++n) x[size_t(n)] = (n >= n_min && n < n_max) ? p.a1 : 0.0;
+        for (int n = 0; n < n_end; ++n) x[size_t(n)] = (n >= n_min && n < n_max) ? A1 : cplx(0.0);
         break;
     }
     case Stim::Step:
-        for (int n = std::max(t1_idx, 0); n < n_end; ++n) x[size_t(n)] = p.a1;
+        for (int n = std::max(t1_idx, 0); n < n_end; ++n) x[size_t(n)] = A1;
         break;
     case Stim::Cos:
         for (int n = 0; n < n_end; ++n)
-            x[size_t(n)] = p.a1 * std::cos(2 * PI * n * p.f1 + phi1) + p.a2 * std::cos(2 * PI * n * p.f2 + phi2);
+            x[size_t(n)] = A1 * std::cos(2 * PI * n * p.f1 + phi1) + A2 * std::cos(2 * PI * n * p.f2 + phi2);
         break;
     case Stim::Sine:
         for (int n = 0; n < n_end; ++n)
-            x[size_t(n)] = p.a1 * std::sin(2 * PI * n * p.f1 + phi1) + p.a2 * std::sin(2 * PI * n * p.f2 + phi2);
+            x[size_t(n)] = A1 * std::sin(2 * PI * n * p.f1 + phi1) + A2 * std::sin(2 * PI * n * p.f2 + phi2);
+        break;
+    case Stim::Exp:
+        for (int n = 0; n < n_end; ++n)
+            x[size_t(n)] = A1 * std::exp(cplx(0, 2 * PI * n * p.f1 + phi1)) + A2 * std::exp(cplx(0, 2 * PI * n * p.f2 + phi2));
         break;
     case Stim::Diric:
         if (p.n1 < 1) throw DesignError("N1 needs to be >= 1.");
-        for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * diric(2 * PI * (n - p.t1) * p.f1, p.n1);
+        for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * diric(2 * PI * (n - p.t1) * p.f1, p.n1);
         break;
     case Stim::Chirp: {
         const double t_end = p.t2 == 0 ? n_end : p.t2;  // sweep over the whole interval or up to t2
         // pyfda passes the phase in radians to scipy.signal.chirp which expects degrees;
         // here phi1 is used in degrees like for all other stimuli
-        for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * chirp(n, p.f1, t_end, p.f2, p.chirp, p.phi1);
+        for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * chirp(n, p.f1, t_end, p.f2, p.chirp, p.phi1);
         break;
     }
     case Stim::Triang:
         if (bl) {
             need_f1();
             const Vec y = triang_bl(phase1());
-            for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * y[size_t(n)];
+            for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * y[size_t(n)];
         } else {
-            for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * sawtooth(2 * PI * n * p.f1 + phi1, 0.5);
+            for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * sawtooth(2 * PI * n * p.f1 + phi1, 0.5);
         }
         break;
     case Stim::Saw:
         if (bl) {
             need_f1();
             const Vec y = sawtooth_bl(phase1());
-            for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * y[size_t(n)];
+            for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * y[size_t(n)];
         } else {
-            for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * sawtooth(2 * PI * n * p.f1 + phi1);
+            for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * sawtooth(2 * PI * n * p.f1 + phi1);
         }
         break;
     case Stim::RectPer:
         if (bl) {
             need_f1();
             const Vec y = rect_bl(phase1(), Vec(size_t(n_end), p.duty));
-            for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * y[size_t(n)];
+            for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * y[size_t(n)];
         } else {
-            for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * square(2 * PI * n * p.f1 + phi1, p.duty);
+            for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * square(2 * PI * n * p.f1 + phi1, p.duty);
         }
         break;
     case Stim::Comb: {
         need_f1();
         if (n_end < 2) throw DesignError("The comb signal needs at least 2 samples.");
         const Vec y = comb_bl(phase1());
-        for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * y[size_t(n)];
+        for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * y[size_t(n)];
         break;
     }
     case Stim::AM:
         for (int n = 0; n < n_end; ++n)
-            x[size_t(n)] = p.a1 * std::sin(2 * PI * n * p.f1 + phi1) * p.a2 * std::sin(2 * PI * n * p.f2 + phi2);
+            x[size_t(n)] = A1 * std::sin(2 * PI * n * p.f1 + phi1) * A2 * std::sin(2 * PI * n * p.f2 + phi2);
         break;
     case Stim::PMFM:
         for (int n = 0; n < n_end; ++n)
-            x[size_t(n)] = p.a1 * std::sin(2 * PI * n * p.f1 + phi1 + p.a2 * std::sin(2 * PI * n * p.f2 + phi2));
+            x[size_t(n)] = p.a2_im == 0 ? A1 * std::sin(2 * PI * n * p.f1 + phi1 + p.a2 * std::sin(2 * PI * n * p.f2 + phi2))
+                                        : A1 * std::sin(2 * PI * n * p.f1 + phi1 + A2 * std::sin(2 * PI * n * p.f2 + phi2));
         break;
     case Stim::PWM: {
         Vec duty(static_cast<size_t>(n_end));
@@ -323,66 +334,90 @@ Vec calc_stimulus(const StimParams &p, int n_end) {
         if (bl) {
             need_f1();
             const Vec y = rect_bl(phase1(), duty);
-            for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * y[size_t(n)];
+            for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * y[size_t(n)];
         } else {
-            for (int n = 0; n < n_end; ++n) x[size_t(n)] = p.a1 * square(2 * PI * n * p.f1 + phi1, duty[size_t(n)]);
+            for (int n = 0; n < n_end; ++n) x[size_t(n)] = A1 * square(2 * PI * n * p.f1 + phi1, duty[size_t(n)]);
         }
         break;
     }
-    case Stim::Formula:
+    case Stim::Formula: {
         // same names as in pyfda (phi in degrees, times in samples)
-        x = eval_formula(p.formula, n_end, p.f_s,
-                         {{"A1", p.a1}, {"A2", p.a2}, {"f1", p.f1}, {"f2", p.f2}, {"phi1", p.phi1},
-                          {"phi2", p.phi2}, {"T1", p.t1}, {"T2", p.t2}, {"N1", p.n1}, {"BW1", p.bw1},
-                          {"BW2", p.bw2}, {"f_S", p.f_s}, {"pi", PI}, {"e", std::exp(1.0)}});
+        bool fc = false;
+        x = eval_formula_c(p.formula, n_end, p.f_s,
+                           {{"A1", A1}, {"A2", A2}, {"f1", p.f1}, {"f2", p.f2}, {"phi1", p.phi1},
+                            {"phi2", p.phi2}, {"T1", p.t1}, {"T2", p.t2}, {"N1", p.n1}, {"BW1", p.bw1},
+                            {"BW2", p.bw2}, {"f_S", p.f_s}, {"pi", PI}, {"e", std::exp(1.0)}}, &fc);
+        c = c || fc;
         break;
+    }
     case Stim::File:
         if (!p.x_file || p.x_file->empty()) throw DesignError("No data file loaded for the stimulus.");
-        for (int n = 0; n < n_end && size_t(n) < p.x_file->size(); ++n) x[size_t(n)] = p.a1 * (*p.x_file)[size_t(n)];
+        for (int n = 0; n < n_end && size_t(n) < p.x_file->size(); ++n) x[size_t(n)] = A1 * (p.x_file_im ? cplx((*p.x_file)[size_t(n)], (*p.x_file_im)[size_t(n)]) : cplx((*p.x_file)[size_t(n)]));
         break;
     }
 
-    // --- noise
+    // --- noise, real part first (same sequence as for real noise), then the imaginary part
     std::mt19937 rng(p.seed);
-    switch (p.noise) {
-    case Noise::None: break;
-    case Noise::Gauss: {
-        std::normal_distribution<double> d(0.0, 1.0);
-        for (double &v : x) v += p.noi * d(rng);
-        break;
-    }
-    case Noise::Uniform: {
-        std::uniform_real_distribution<double> d(0.0, 1.0);
-        for (double &v : x) v += p.noi * (d(rng) - 0.5);
-        break;
-    }
-    case Noise::RandInt: {
-        std::uniform_int_distribution<long long> d(0, (long long)(std::fabs(p.noi)));
-        for (double &v : x) v += double(d(rng));
-        break;
-    }
-    case Noise::MLS: {
-        // fixed seed like pyfda, yielding the same sequence at every run
-        static const int seed[] = {1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1,
-                                   0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0};
-        const int b = std::clamp(p.mls_b, 2, 32);
-        std::vector<int> state(seed, seed + b);
-        const std::vector<int> s = max_len_seq(b, state, n_end);
-        for (int n = 0; n < n_end; ++n) x[size_t(n)] += s[size_t(n)] * p.noi;
-        break;
-    }
-    case Noise::Brownian: {
-        std::normal_distribution<double> d(0.0, 1.0);
-        double acc = 0;
-        for (double &v : x) {
-            acc += p.noi * d(rng);
-            v += acc;
+    auto add_noise = [&](Vec &xr, double noi) {
+        switch (p.noise) {
+        case Noise::None: break;
+        case Noise::Gauss: {
+            std::normal_distribution<double> d(0.0, 1.0);
+            for (double &v : xr) v += noi * d(rng);
+            break;
         }
-        break;
+        case Noise::Uniform: {
+            std::uniform_real_distribution<double> d(0.0, 1.0);
+            for (double &v : xr) v += noi * (d(rng) - 0.5);
+            break;
+        }
+        case Noise::RandInt: {
+            std::uniform_int_distribution<long long> d(0, (long long)(std::fabs(noi)));
+            for (double &v : xr) v += double(d(rng));
+            break;
+        }
+        case Noise::MLS: {
+            // fixed seed like pyfda, yielding the same sequence at every run
+            static const int seed[] = {1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1,
+                                       0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0};
+            const int b = std::clamp(p.mls_b, 2, 32);
+            std::vector<int> state(seed, seed + b);
+            const std::vector<int> s = max_len_seq(b, state, n_end);
+            for (int n = 0; n < n_end; ++n) xr[size_t(n)] += s[size_t(n)] * noi;
+            break;
+        }
+        case Noise::Brownian: {
+            std::normal_distribution<double> d(0.0, 1.0);
+            double acc = 0;
+            for (double &v : xr) {
+                acc += noi * d(rng);
+                v += acc;
+            }
+            break;
+        }
+        }
+    };
+    {
+        Vec xr(x.size());
+        for (size_t i = 0; i < x.size(); ++i) xr[i] = x[i].real();
+        add_noise(xr, p.noi);
+        for (size_t i = 0; i < x.size(); ++i) x[i].real(xr[i]);
+        if (p.noise != Noise::None && p.noi_im != 0) {
+            for (size_t i = 0; i < x.size(); ++i) xr[i] = x[i].imag();
+            add_noise(xr, p.noi_im);
+            for (size_t i = 0; i < x.size(); ++i) x[i].imag(xr[i]);
+        }
     }
-    }
-    if (stim_uses(p.stim, "dc") && p.dc != 0)
-        for (double &v : x) v += p.dc;
+    if (stim_uses(p.stim, "dc") && (p.dc != 0 || p.dc_im != 0))
+        for (cplx &v : x) v += cplx(p.dc, p.dc_im);
+    if (cmplx) *cmplx = c;
+    return x;
+}
+
+Vec calc_stimulus(const StimParams &p, int n_end) {
+    const CVec xc = calc_stimulus_c(p, n_end);
+    Vec x(xc.size());
+    for (size_t i = 0; i < xc.size(); ++i) x[i] = xc[i].real();
     return x;
 }
 
@@ -397,6 +432,7 @@ std::string stim_title(const StimParams &p, bool step_error) {
     case Stim::Step: t = step_error ? "Settling Error" : "Step Response"; break;
     case Stim::Cos: t = "Cosine Stimulus"; break;
     case Stim::Sine: t = "Sinusoidal Stimulus"; break;
+    case Stim::Exp: t = "Complex Exponential Stimulus"; break;
     case Stim::Diric: t = "Periodic Sinc Stimulus"; break;
     case Stim::Chirp: {
         static const char *names[] = {"Linear", "Quadratic", "Logarithmic", "Hyperbolic"};
@@ -460,6 +496,23 @@ CVec windowed_fft(const Vec &x, const Vec &win) {
     return X;
 }
 
+CVec windowed_fft(const CVec &x, const Vec &win) {
+    const size_t N = x.size();
+    const double cg = window_cgain(win);
+    CVec xw(N);
+    for (size_t i = 0; i < N; ++i) xw[i] = x[i] * (win[i] / cg);
+    CVec X = fft(xw);
+    for (cplx &v : X) v /= double(N);
+    return X;
+}
+
+CVec fftshift(const CVec &X) {
+    const size_t N = X.size();
+    CVec s(N);
+    for (size_t k = 0; k < N; ++k) s[k] = X[(k + (N + 1) / 2) % N];
+    return s;
+}
+
 CVec ssb_spectrum(const CVec &X) {
     const size_t N = X.size();
     if (N == 0) return {};
@@ -469,7 +522,11 @@ CVec ssb_spectrum(const CVec &X) {
     return s;
 }
 
-Spectrogram spectrogram(const Vec &x, double fs, const Vec &win, int noverlap, SpgrMode mode, bool density) {
+namespace {
+// scipy.signal.spectrogram for real (one-sided) or complex (two-sided, shifted) data
+template <class T>
+Spectrogram spectrogram_impl(const std::vector<T> &x, bool onesided, double fs, const Vec &win, int noverlap,
+                             SpgrMode mode, bool density) {
     const int nperseg = int(win.size());
     if (nperseg < 1) throw DesignError("Spectrogram: NFFT must be >= 1.");
     if (noverlap < 0 || noverlap >= nperseg) throw DesignError("Spectrogram: 0 <= N_overlap < NFFT is required.");
@@ -483,25 +540,28 @@ Spectrogram spectrogram(const Vec &x, double fs, const Vec &win, int noverlap, S
     }
     double scale = density ? 1.0 / (fs * s2) : 1.0 / (s1 * s1);
     if (mode != SpgrMode::PSD) scale = std::sqrt(scale);
-    const int n_bins = nperseg / 2 + 1;
+    const int n_bins = onesided ? nperseg / 2 + 1 : nperseg;
+    // FFT bin of the k-th output value (two-sided: fftshift order)
+    auto bin = [&](int k) { return onesided ? k : (k + (nperseg + 1) / 2) % nperseg; };
     Spectrogram r;
-    for (int k = 0; k < n_bins; ++k) r.f.push_back(k * fs / nperseg);
+    for (int k = 0; k < n_bins; ++k) r.f.push_back((onesided ? k : k - nperseg / 2) * fs / nperseg);
     for (int m = 0; m < n_seg; ++m) {
         const size_t off = size_t(m) * size_t(step);
-        double mean = 0;
+        T mean = 0;
         for (int k = 0; k < nperseg; ++k) mean += x[off + size_t(k)];
-        mean /= nperseg;
+        mean /= double(nperseg);
         CVec seg(static_cast<size_t>(nperseg));
         for (int k = 0; k < nperseg; ++k) seg[size_t(k)] = (x[off + size_t(k)] - mean) * win[size_t(k)];
         const CVec X = fft(seg);
         Vec row(static_cast<size_t>(n_bins));
         for (int k = 0; k < n_bins; ++k) {
-            const cplx v = X[size_t(k)] * (mode == SpgrMode::PSD ? 1.0 : scale);
+            const cplx Xk = X[size_t(bin(k))];
+            const cplx v = Xk * (mode == SpgrMode::PSD ? 1.0 : scale);
             switch (mode) {
             case SpgrMode::PSD: {
-                double p = std::norm(X[size_t(k)]) * scale;
+                double p = std::norm(Xk) * scale;
                 const bool edge = k == 0 || (nperseg % 2 == 0 && k == n_bins - 1);
-                if (!edge) p *= 2;
+                if (onesided && !edge) p *= 2;
                 row[size_t(k)] = p;
                 break;
             }
@@ -513,6 +573,15 @@ Spectrogram spectrogram(const Vec &x, double fs, const Vec &win, int noverlap, S
         r.t.push_back((nperseg / 2.0 + double(off)) / fs);
     }
     return r;
+}
+}  // namespace
+
+Spectrogram spectrogram(const Vec &x, double fs, const Vec &win, int noverlap, SpgrMode mode, bool density) {
+    return spectrogram_impl(x, true, fs, win, noverlap, mode, density);
+}
+
+Spectrogram spectrogram(const CVec &x, double fs, const Vec &win, int noverlap, SpgrMode mode, bool density) {
+    return spectrogram_impl(x, false, fs, win, noverlap, mode, density);
 }
 
 WindowProps window_props(const Vec &win, int zero_pad) {

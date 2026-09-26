@@ -1,6 +1,7 @@
 #include "data_filt_tab.hpp"
 
 #include "filtering.hpp"
+#include "stimulus.hpp"
 #include "logger.hpp"
 #include "plot_widget.hpp"
 
@@ -27,7 +28,8 @@ DataFiltView::DataFiltView(QWidget *parent) : DesignView(parent) {
     m_but_load = new QPushButton(tr("Load data ..."), this);
     m_but_load->setToolTip(tr("<span>Load data from a file (csv, txt, wav, npy). Delimiter, decimal "
                               "comma, header and encoding of csv / txt files are detected automatically, "
-                              "comment lines (#, %, //) and metadata lines are skipped.</span>"));
+                              "comment lines (#, %, //) and metadata lines are skipped. Complex data: "
+                              "complex npy arrays or cells like 1+2j, (1+2j) or 1+2i.</span>"));
     m_lbl_file = new QLabel(tr("No file loaded"), this);
     m_lbl_fs_warn = new QLabel(this);
     m_lbl_fs_warn->setStyleSheet("QLabel {color: darkorange; font-weight: bold}");
@@ -148,8 +150,11 @@ bool DataFiltView::loadFile(const QString &file_name) {
 
 void DataFiltView::selectData() {
     if (!m_data || m_cmb_col->currentIndex() < 0) return;
-    m_x = m_data->column(size_t(m_cmb_col->currentIndex()));
+    const size_t col = size_t(m_cmb_col->currentIndex());
+    m_x = m_data->column(col);
+    m_xi = m_data->column_complex(col) ? m_data->column_imag(col) : Vec();
     m_y.reset();
+    m_yi.clear();
     m_but_filter->setEnabled(true);
     m_but_export->setEnabled(false);
     redrawNow();
@@ -186,16 +191,22 @@ bool DataFiltView::computeFilter() {
         }
     if (n_nan) Logger::warning(tr("Replacing %1 non-numeric value(s) by zero.").arg(n_nan));
     const bool zero_phase = m_chk_zero_phase->isChecked();
-    try {
+    auto filt = [&](const Vec &v) {
         // second-order sections for IIR filters for better numerical stability
-        if (!m_design->sos.empty())
-            m_y = zero_phase ? sosfiltfilt(m_design->sos, x) : sosfilt(m_design->sos, x);
-        else
-            m_y = zero_phase ? filtfilt(m_design->ba.b, m_design->ba.a, x)
-                             : lfilter(m_design->ba.b, m_design->ba.a, x);
+        if (!m_design->sos.empty()) return zero_phase ? sosfiltfilt(m_design->sos, v) : sosfilt(m_design->sos, v);
+        return zero_phase ? filtfilt(m_design->ba.b, m_design->ba.a, v) : lfilter(m_design->ba.b, m_design->ba.a, v);
+    };
+    try {
+        m_y = filt(x);
+        // complex data: the coefficients are real, filter real and imaginary part separately
+        Vec xi = m_xi;
+        for (double &v : xi)
+            if (std::isnan(v)) v = 0.0;
+        m_yi = xi.empty() ? Vec() : filt(xi);
     } catch (const std::exception &e) {
         Logger::error(tr("Filtering failed:\n%1").arg(e.what()));
         m_y.reset();
+        m_yi.clear();
     }
     m_but_export->setEnabled(m_y.has_value());
     return m_y.has_value();
@@ -279,40 +290,55 @@ void DataFiltView::redraw() {
     const Vec t = timeAxis(t_label);
     const QString name = m_cmb_col->currentText();
     const QVector<double> qt(t.begin(), t.end());
-    PlotWidget::Curve orig;
-    orig.x = qt;
-    orig.y = QVector<double>(m_x.begin(), m_x.end());
-    orig.color = PlotWidget::color(0);
-    orig.name = tr("Original") + " (" + name + ")";
-    orig.alpha = m_y ? 0.6 : 1.0;
-    orig.width = 1.2;
-    m_plot_t->addCurve(orig);
+    const bool cmplx = !m_xi.empty();
+    // complex data: real part solid, imaginary part dashed
+    auto add = [&](const Vec &v, int color, const QString &label, double alpha, bool imag) {
+        PlotWidget::Curve c;
+        c.x = qt;
+        c.y = QVector<double>(v.begin(), v.end());
+        c.color = PlotWidget::color(color);
+        c.name = cmplx ? QString("%1{%2}").arg(imag ? "Im" : "Re", label) : label;
+        c.alpha = alpha;
+        c.width = 1.2;
+        if (imag) c.pen = Qt::DashLine;
+        m_plot_t->addCurve(c);
+    };
+    add(m_x, 0, tr("Original") + " (" + name + ")", m_y ? 0.6 : 1.0, false);
+    if (cmplx) add(m_xi, 0, tr("Original"), m_y ? 0.6 : 1.0, true);
     if (m_y) {
-        PlotWidget::Curve filt;
-        filt.x = qt;
-        filt.y = QVector<double>(m_y->begin(), m_y->end());
-        filt.color = PlotWidget::color(1);
-        filt.name = tr("Filtered");
-        filt.width = 1.2;
-        m_plot_t->addCurve(filt);
+        add(*m_y, 1, tr("Filtered"), 1.0, false);
+        if (cmplx) add(m_yi, 1, tr("Filtered"), 1.0, true);
     }
     m_plot_t->setXLabel(t_label);
-    m_plot_t->setYLabel(name);
+    m_plot_t->setYLabel(cmplx ? tr("%1 (real, imag.)").arg(name) : name);
     m_plot_t->autoscale();
     m_plot_t->keepView(true);
 
     if (spec) {
         const size_t N = m_x.size();
         int k = 0;
+        const Vec *imag[] = {&m_xi, &m_yi};
         for (const Vec *d : {&m_x, m_y ? &*m_y : nullptr}) {
             if (!d) continue;
-            Vec clean(*d);
-            for (double &v : clean)
-                if (!std::isfinite(v)) v = 0.0;
-            const Vec A = amplitude_spectrum(clean);
+            Vec A;
+            double f0 = 0;
+            if (cmplx) {  // two-sided amplitude spectrum -f_S/2 ... f_S/2
+                CVec c(N);
+                for (size_t i = 0; i < N; ++i) {
+                    const cplx v((*d)[i], (*imag[k])[i]);
+                    c[i] = std::isfinite(v.real()) && std::isfinite(v.imag()) ? v : cplx(0.0);
+                }
+                for (const cplx &v : fftshift(fft(c))) A.push_back(std::abs(v) / double(N));
+                f0 = -double(N / 2);
+            } else {
+                Vec clean(*d);
+                for (double &v : clean)
+                    if (!std::isfinite(v)) v = 0.0;
+                A = amplitude_spectrum(clean);
+            }
             QVector<double> f(int(A.size())), y(int(A.size()));
             for (size_t i = 0; i < A.size(); ++i) {
-                f[int(i)] = double(i) * m_ctx.f_s / double(N);
+                f[int(i)] = (double(i) + f0) * m_ctx.f_s / double(N);
                 y[int(i)] = 20 * std::log10(std::max(A[i], 1e-12));
             }
             m_plot_f->addCurve(f, y, PlotWidget::color(k), k == 0 ? tr("Original") : tr("Filtered"));
@@ -339,7 +365,13 @@ bool DataFiltView::saveCsv(const QString &file_name) {
     const Vec t = timeAxis(t_label);
     const std::string name = m_cmb_col->currentText().toStdString();
     try {
-        write_csv(QFile::encodeName(file_name).toStdString(), {"t", name, name + "_filtered"}, {&t, &m_x, &*m_y}, config::csvFormat());
+        if (m_xi.empty())
+            write_csv(QFile::encodeName(file_name).toStdString(), {"t", name, name + "_filtered"}, {&t, &m_x, &*m_y},
+                      config::csvFormat());
+        else  // real and imaginary parts in separate columns
+            write_csv(QFile::encodeName(file_name).toStdString(),
+                      {"t", name + "_re", name + "_im", name + "_filtered_re", name + "_filtered_im"},
+                      {&t, &m_x, &m_xi, &*m_y, &m_yi}, config::csvFormat());
         Logger::info(tr("Exported filtered data to '%1'.").arg(file_name));
         return true;
     } catch (const std::exception &e) {

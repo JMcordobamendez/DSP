@@ -12,18 +12,25 @@ struct DataTable {
     size_t n_rows = 0;
     size_t n_cols = 0;
     Vec values;                      // row-major, NaN for non-numeric cells
+    Vec imag;                        // imaginary parts of complex data (same layout) or empty
     std::vector<std::string> names;  // column names (UTF-8)
     double fs = 0.0;                 // sampling rate stored in the file (wav), 0 if unknown
     std::vector<std::string> warnings;
 
     double at(size_t row, size_t col) const { return values[row * n_cols + col]; }
     Vec column(size_t col) const;
+    /// True when column `col` contains complex values (imaginary part != 0)
+    bool column_complex(size_t col) const;
+    /// Imaginary part of column `col` (zeros for real data)
+    Vec column_imag(size_t col) const;
 };
 
 /// Convert a string to a number, NaN for empty or non-numeric strings.
 /// A decimal comma is accepted when there is no dot.
 double str2num(const std::string &s);
 bool is_num(const std::string &s);
+/// Complex numbers like Python / numpy ("(1+2j)", "1-2.5e-3j", "2j") or Matlab ("1+2i")
+bool str2cplx(const std::string &s, cplx &v);
 
 /// Tolerant reader for csv / txt files: detects encoding, delimiter, header
 /// and skips comment (#, %, //) and metadata lines. Throws DesignError on failure.
