@@ -483,7 +483,7 @@ void TranView::updateEdits() {
     set("n1", m_p.n1);
     set("dc", m_p.dc);
     m_noi->setText(fmt(m_p.noi));
-    const QString fu = m_ctx.unit_to_hz == 0 ? tr("normalized to f_S") : m_ctx.f_label;
+    const QString fu = m_ctx.f_label;
     for (const QString &k : F_KEYS) m_edits[k]->setToolTip(m_edits[k]->toolTip().section(" (", 0, 0) + " (" + fu + ")");
     const QString tu = m_ctx.unit_to_hz == 0 ? tr("samples") : m_ctx.t_label;
     for (const QString &k : T_KEYS) m_edits[k]->setToolTip(m_edits[k]->toolTip().section(" (", 0, 0) + " (" + tu + ")");

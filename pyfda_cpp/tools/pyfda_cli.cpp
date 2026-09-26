@@ -112,7 +112,7 @@ WindowType win_type(const std::string &n) {
     for (const auto &w : window_list()) {
         std::string name = w.name;
         for (char &c : name) c = char(std::tolower(c));
-        if (name == n) return w.type;
+        if (name == n || name.substr(0, name.find(' ')) == n) return w.type;
     }
     throw DesignError("unknown window " + n);
 }
@@ -389,6 +389,14 @@ std::string run(const std::string &line) {
         const StimParams p = parse_stim(in);
         return "{\"x\":" + arr(calc_stimulus(p, n)) + ",\"title\":" + str(stim_title(p)) + ",\"scale\":" +
                num(impulse_scale(p)) + "}";
+    }
+    if (cmd == "amp") {  // amp <to|from> <value> <dB|V|W> <fir 0/1> <pb 0/1>
+        std::string dir, u;
+        double v;
+        int fir, pb;
+        in >> dir >> v >> u >> fir >> pb;
+        const AmpUnit au = u == "V" ? AmpUnit::V : u == "W" ? AmpUnit::W : AmpUnit::dB;
+        return "{\"v\":" + num(dir == "to" ? amp_to_db(v, au, fir, pb) : amp_from_db(v, au, fir, pb)) + "}";
     }
     if (cmd == "spgr") {  // spgr <psd|magnitude|angle> <density 0/1> <fs> <window> <par> <nperseg> <noverlap> <x>
         std::string mode, w, x;

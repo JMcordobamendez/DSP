@@ -70,4 +70,11 @@ FilterDesign design_filter(const FilterSpec &spec);
 double fir_a_pb_lin(double A_PB_dB);
 double sb_lin(double A_SB_dB);
 
+/// Amplitude specs in dB, V (linear) or W (squared) like pyfda's unit2lin / lin2unit:
+/// pass band IIR: dB = -20 log10(1 - v), FIR: dB = 20 log10((1 + v) / (1 - v)); stop band:
+/// dB = -20 log10(v). Throws DesignError for values out of range.
+enum class AmpUnit { dB, V, W };
+double amp_to_db(double value, AmpUnit unit, bool fir, bool pass_band);
+double amp_from_db(double db, AmpUnit unit, bool fir, bool pass_band);
+
 }  // namespace pyfda

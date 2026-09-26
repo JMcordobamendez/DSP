@@ -27,7 +27,7 @@ const char *window_name(WindowType w);
 /// Contents of a filter file
 struct FilterFile {
     FilterSpec spec;
-    std::string unit = "f_S";  // frequency unit of the specs: "f_S" (normalized), "Hz", "kHz", "MHz"
+    std::string unit = "f_S";  // frequency unit of the specs: "f_S" / "f_Ny" (normalized), "mHz", "Hz", "kHz", "MHz", "GHz"
     Ba ba;                     // stored coefficients (only for reference)
     Sos sos;
     bool has_fx = false;       // fixpoint settings stored

@@ -17,6 +17,26 @@
 using namespace pyfda;
 
 namespace {
+// frequency units like pyfda's freq_units.py
+struct UnitDef {
+    const char *key;     // stored in filter files
+    const char *text;    // combo box text
+    double to_hz;        // 0: normalized
+    double norm_fs;      // f_S for normalized units
+    const char *f_label;
+    const char *t_label;
+};
+const UnitDef UNITS[] = {
+    {"f_S", "f_S (norm.)", 0, 1, "F = f / f_S", "n"},
+    {"f_Ny", "f_Ny (norm.)", 0, 2, "F = 2f / f_S", "n"},
+    {"mHz", "mHz", 1e-3, 0, "f / mHz", "t / ks"},
+    {"Hz", "Hz", 1, 0, "f / Hz", "t / s"},
+    {"kHz", "kHz", 1e3, 0, "f / kHz", "t / ms"},
+    {"MHz", "MHz", 1e6, 0, "f / MHz", "t / \xC2\xB5s"},
+    {"GHz", "GHz", 1e9, 0, "f / GHz", "t / ns"},
+};
+const UnitDef &unit_def(int i) { return UNITS[std::clamp(i, 0, int(std::size(UNITS)) - 1)]; }
+
 const DesignMethod IIR_METHODS[] = {DesignMethod::Butter, DesignMethod::Cheby1, DesignMethod::Cheby2,
                                     DesignMethod::Ellip, DesignMethod::Bessel, DesignMethod::ManualIIR};
 const DesignMethod FIR_METHODS[] = {DesignMethod::Equiripple, DesignMethod::Firwin, DesignMethod::MovingAverage,
@@ -95,9 +115,10 @@ SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
     auto *grpF = m_grpF = new QGroupBox(tr("Frequencies"), this);
     auto *gF = new QGridLayout(grpF);
     m_unit = new QComboBox(this);
-    m_unit->addItems({"f_S (norm.)", "Hz", "kHz", "MHz"});
+    for (const UnitDef &u : UNITS) m_unit->addItem(u.text, QString(u.key));
     m_unit->setToolTip(tr("<span>Frequency unit. With <i>f_S (norm.)</i> all frequencies are "
-                          "normalized to the sampling frequency f_S = 1.</span>"));
+                          "normalized to the sampling frequency f_S = 1, with <i>f_Ny (norm.)</i> to the "
+                          "Nyquist frequency f_S / 2 = 1.</span>"));
     gF->addWidget(new QLabel(tr("Unit:"), this), 0, 0);
     gF->addWidget(m_unit, 0, 1);
     m_lfs = new QLabel("f_S =", this);
@@ -117,8 +138,15 @@ SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
     // --- amplitude specs ----------------------------------------------------
     auto *grpA = m_grpA = new QGroupBox(tr("Amplitudes"), this);
     auto *gA = new QGridLayout(grpA);
-    addRow(gA, 0, "A_PB / dB", m_apb, m_lapb, tr("Maximum pass band ripple in dB"));
-    addRow(gA, 1, "A_SB / dB", m_asb, m_lasb, tr("Minimum stop band attenuation in dB"));
+    m_amp_unit = new QComboBox(this);
+    m_amp_unit->addItems({"dB", "V", "W"});
+    m_amp_unit->setToolTip(tr("<span>Unit of the amplitude specs: dB, linear deviation (V) or its square (W). "
+                              "Pass band: IIR: A_dB = -20 log10(1 - A_V), FIR: A_dB = 20 log10((1 + A_V) / "
+                              "(1 - A_V)); stop band: A_dB = -20 log10(A_V).</span>"));
+    gA->addWidget(new QLabel(tr("Unit:"), this), 4, 0);
+    gA->addWidget(m_amp_unit, 4, 1);
+    addRow(gA, 0, "A_PB / dB", m_apb, m_lapb, tr("Maximum pass band ripple"));
+    addRow(gA, 1, "A_SB / dB", m_asb, m_lasb, tr("Minimum stop band attenuation"));
     addRow(gA, 2, "W_PB", m_wpb, m_lwpb, tr("Pass band weight (equiripple, manual order)"));
     addRow(gA, 3, "W_SB", m_wsb, m_lwsb, tr("Stop band weight (equiripple, manual order)"));
     m_apb->setText("1");
@@ -178,6 +206,21 @@ SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
         updateVisibility();
     });
     connect(m_unit, &QComboBox::currentIndexChanged, this, &SpecPanel::onUnitChanged);
+    connect(m_amp_unit, &QComboBox::currentIndexChanged, this, [this](int u) {
+        // convert the displayed values to the new unit
+        const bool fir = is_fir(DesignMethod(m_method->currentData().toInt()));
+        for (auto [e, pb] : {std::pair{m_apb, true}, std::pair{m_asb, false}}) {
+            try {
+                const double db = amp_to_db(parse(e, ""), AmpUnit(m_amp_unit_prev), fir, pb);
+                e->setText(fmt(amp_from_db(db, AmpUnit(u), fir, pb)));
+            } catch (const DesignError &) {
+            }
+        }
+        m_amp_unit_prev = u;
+        const QString un = m_amp_unit->currentText();
+        m_lapb->setText("A_PB / " + un + ":");
+        m_lasb->setText("A_SB / " + un + ":");
+    });
     connect(m_fs, &QLineEdit::editingFinished, this, &SpecPanel::onFsEdited);
     connect(m_design, &QPushButton::clicked, this, &SpecPanel::designRequested);
     for (QLineEdit *e : findChildren<QLineEdit *>())
@@ -261,40 +304,24 @@ void SpecPanel::onFsEdited() {
 }
 
 void SpecPanel::onUnitChanged() {
-    const bool norm = m_unit->currentIndex() == 0;
-    if (norm) {
+    const UnitDef &u = unit_def(m_unit->currentIndex());
+    const bool norm = u.to_hz == 0;
+    if (norm) {  // keep the normalized frequencies
         storeFreqs();
-        m_fs_prev = 1.0;
-        m_fs->setText("1");
+        m_fs_prev = u.norm_fs;
+        m_fs->setText(fmt(u.norm_fs));
         loadFreqs();
     }
     m_fs->setEnabled(!norm);
-    const QString u = norm ? QString() : " / " + m_unit->currentText();
-    m_lfs->setText("f_S" + u + " =");
+    m_lfs->setText("f_S" + (norm ? QString() : " / " + m_unit->currentText()) + " =");
     emit unitsChanged();
 }
 
-double SpecPanel::unitToHz() const {
-    switch (m_unit->currentIndex()) {
-    case 1: return 1.0;
-    case 2: return 1e3;
-    case 3: return 1e6;
-    default: return 0.0;
-    }
-}
+double SpecPanel::unitToHz() const { return unit_def(m_unit->currentIndex()).to_hz; }
 
-QString SpecPanel::freqLabel() const {
-    return m_unit->currentIndex() == 0 ? QString("F = f / f_S") : "f / " + m_unit->currentText();
-}
+QString SpecPanel::freqLabel() const { return QString::fromUtf8(unit_def(m_unit->currentIndex()).f_label); }
 
-QString SpecPanel::timeLabel() const {
-    switch (m_unit->currentIndex()) {
-    case 1: return "t / s";
-    case 2: return "t / ms";
-    case 3: return QString("t / %1s").arg(QChar(0x00B5));
-    default: return "n";
-    }
-}
+QString SpecPanel::timeLabel() const { return QString::fromUtf8(unit_def(m_unit->currentIndex()).t_label); }
 
 double SpecPanel::timeScale() const {
     // with f_S in kHz, n / f_S is in ms etc., normalized: f_S = 1 -> n
@@ -385,6 +412,9 @@ void SpecPanel::updateVisibility() {
     const bool alg = fir && min && !(firwin && w.type == WindowType::Kaiser);
     m_alg->setVisible(alg);
     m_lalg->setVisible(alg);
+    // no amplitude specs (e.g. manual order Butterworth or FIR): hide the group with the unit
+    if (!manual && !ma_man)
+        m_grpA->setVisible(!m_apb->isHidden() || !m_asb->isHidden() || !m_wpb->isHidden());
 }
 
 FilterSpec SpecPanel::spec() const {
@@ -400,8 +430,9 @@ FilterSpec SpecPanel::spec() const {
     s.f_sb2 = parse(m_fsb2, "F_SB2");
     s.f_c = parse(m_fc, "F_C");
     s.f_c2 = parse(m_fc2, "F_C2");
-    s.A_PB = parse(m_apb, "A_PB");
-    s.A_SB = parse(m_asb, "A_SB");
+    const AmpUnit au = AmpUnit(m_amp_unit->currentIndex());
+    s.A_PB = amp_to_db(parse(m_apb, "A_PB"), au, is_fir(s.method), true);
+    s.A_SB = amp_to_db(parse(m_asb, "A_SB"), au, is_fir(s.method), false);
     s.W_PB = parse(m_wpb, "W_PB");
     s.W_SB = parse(m_wsb, "W_SB");
     s.window = WindowType(m_window->currentData().toInt());
@@ -433,19 +464,19 @@ void SpecPanel::updateFromDesign(const FilterSpec &s) {
     storeFreqs();
 }
 
-QString SpecPanel::unitKey() const {
-    return m_unit->currentIndex() == 0 ? QString("f_S") : m_unit->currentText();
-}
+QString SpecPanel::unitKey() const { return unit_def(m_unit->currentIndex()).key; }
 
 void SpecPanel::setSpec(const FilterSpec &s, const QString &unit) {
     // unit and f_S without rescaling the frequencies
-    const int ui = unit == "f_S" ? 0 : std::max(0, m_unit->findText(unit));
+    const int ui = std::max(0, m_unit->findData(unit));
+    const UnitDef &u = unit_def(ui);
+    const bool norm = u.to_hz == 0;
     m_unit->blockSignals(true);
     m_unit->setCurrentIndex(ui);
     m_unit->blockSignals(false);
-    m_fs->setEnabled(ui != 0);
-    m_lfs->setText("f_S" + (ui == 0 ? QString() : " / " + m_unit->currentText()) + " =");
-    m_fs_prev = ui == 0 ? 1.0 : s.f_s;
+    m_fs->setEnabled(!norm);
+    m_lfs->setText("f_S" + (norm ? QString() : " / " + m_unit->currentText()) + " =");
+    m_fs_prev = norm ? u.norm_fs : s.f_s;
     m_fs->setText(fmt(m_fs_prev));
 
     m_rt->blockSignals(true);
@@ -465,8 +496,11 @@ void SpecPanel::setSpec(const FilterSpec &s, const QString &unit) {
     m_window->setCurrentIndex(std::max(0, m_window->findData(int(s.window))));
     m_winpar->setText(fmt(s.win_par));
     m_alg->setCurrentIndex(int(s.order_alg));
-    m_apb->setText(fmt(s.A_PB));
-    m_asb->setText(fmt(s.A_SB));
+    {
+        const AmpUnit au = AmpUnit(m_amp_unit->currentIndex());
+        m_apb->setText(fmt(amp_from_db(s.A_PB, au, is_fir(s.method), true)));
+        m_asb->setText(fmt(amp_from_db(s.A_SB, au, is_fir(s.method), false)));
+    }
     m_wpb->setText(fmt(s.W_PB));
     m_wsb->setText(fmt(s.W_SB));
     m_stages->setValue(s.ma_stages);

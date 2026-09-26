@@ -10,7 +10,8 @@ namespace pyfda {
 
 enum class WindowType {
     Rectangular, Bartlett, Hann, Hamming, Blackman, BlackmanHarris, Nuttall, Flattop,
-    Kaiser, Gaussian, Tukey
+    Kaiser, Gaussian, Tukey,
+    Barthann, Bohman, Cosine, Parzen, Triang, Chebwin, DPSS
 };
 
 struct WindowInfo {

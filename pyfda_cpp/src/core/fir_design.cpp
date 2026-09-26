@@ -1,5 +1,6 @@
 #include "fir_design.hpp"
 
+#include "filtering.hpp"
 #include "special.hpp"
 
 #include <algorithm>
@@ -20,6 +21,13 @@ const std::vector<WindowInfo> &window_list() {
         {WindowType::Kaiser, "Kaiser", "beta", 10.0},
         {WindowType::Gaussian, "Gaussian", "std", 0.25},  // relative to (M-1)/2
         {WindowType::Tukey, "Tukey", "alpha", 0.5},
+        {WindowType::Barthann, "Bartlett-Hann", nullptr, 0},
+        {WindowType::Bohman, "Bohman", nullptr, 0},
+        {WindowType::Cosine, "Cosine", nullptr, 0},
+        {WindowType::Parzen, "Parzen", nullptr, 0},
+        {WindowType::Triang, "Triangular", nullptr, 0},
+        {WindowType::Chebwin, "Dolph-Chebyshev", "a / dB", 80.0},
+        {WindowType::DPSS, "DPSS (Slepian)", "NW", 3.0},
     };
     return list;
 }
@@ -32,6 +40,100 @@ Vec general_cosine(int M, const Vec &a) {
         for (size_t k = 0; k < a.size(); ++k) w[n] += a[k] * std::cos(double(k) * fac);
     }
     return w;
+}
+// scipy.signal.windows.chebwin
+Vec chebwin(int M, double at) {
+    const double order = M - 1.0;
+    const double beta = std::cosh(1.0 / order * std::acosh(std::pow(10.0, std::fabs(at) / 20.0)));
+    CVec p(static_cast<size_t>(M));
+    for (int k = 0; k < M; ++k) {
+        const double x = beta * std::cos(PI * k / M);
+        double v;
+        if (x > 1) v = std::cosh(order * std::acosh(x));
+        else if (x < -1) v = (2 * (M % 2) - 1) * std::cosh(order * std::acosh(-x));
+        else v = std::cos(order * std::acos(x));
+        p[size_t(k)] = M % 2 ? cplx(v, 0) : v * std::exp(cplx(0, PI / M * k));
+    }
+    const CVec P = fft(p);
+    Vec w;
+    if (M % 2) {
+        const int n = (M + 1) / 2;
+        for (int k = n - 1; k >= 1; --k) w.push_back(P[size_t(k)].real());
+        for (int k = 0; k < n; ++k) w.push_back(P[size_t(k)].real());
+    } else {
+        const int n = M / 2 + 1;
+        for (int k = n - 1; k >= 1; --k) w.push_back(P[size_t(k)].real());
+        for (int k = 1; k < n; ++k) w.push_back(P[size_t(k)].real());
+    }
+    const double mx = *std::max_element(w.begin(), w.end());
+    for (double &v : w) v /= mx;
+    return w;
+}
+
+// scipy.signal.windows.dpss(M, NW) (single window, norm = 'approximate'): eigenvector of the
+// largest eigenvalue of a symmetric tridiagonal matrix (bisection + inverse iteration)
+Vec dpss(int M, double NW) {
+    if (!(NW > 0) || NW >= M / 2.0) throw DesignError("DPSS window: 0 < NW < M / 2 is required.");
+    const double W = NW / M;
+    Vec d(static_cast<size_t>(M)), e(static_cast<size_t>(M), 0.0);  // e[i]: element (i-1, i)
+    for (int i = 0; i < M; ++i) {
+        const double a = (M - 1 - 2.0 * i) / 2.0;
+        d[size_t(i)] = a * a * std::cos(2 * PI * W);
+        if (i > 0) e[size_t(i)] = i * double(M - i) / 2.0;
+    }
+    // Sturm count: number of eigenvalues < x
+    auto count = [&](double x) {
+        int c = 0;
+        double q = 1;
+        for (int i = 0; i < M; ++i) {
+            q = d[size_t(i)] - x - (i > 0 ? e[size_t(i)] * e[size_t(i)] / q : 0.0);
+            if (q == 0) q = -1e-300;
+            if (q < 0) ++c;
+        }
+        return c;
+    };
+    double lo = 0, hi = 0;  // Gershgorin bounds
+    for (int i = 0; i < M; ++i) {
+        const double r = std::fabs(e[size_t(i)]) + (i + 1 < M ? std::fabs(e[size_t(i) + 1]) : 0.0);
+        lo = std::min(lo, d[size_t(i)] - r);
+        hi = std::max(hi, d[size_t(i)] + r);
+    }
+    for (int it = 0; it < 200 && hi - lo > 1e-15 * std::max(1.0, std::fabs(hi)); ++it) {
+        const double mid = 0.5 * (lo + hi);
+        if (count(mid) >= M) hi = mid;  // all eigenvalues below mid
+        else lo = mid;
+    }
+    const double lambda = hi + 1e-10 * std::max(1.0, std::fabs(hi));  // shift slightly above
+    // inverse iteration: solve (T - lambda I) v_new = v (Thomas algorithm)
+    Vec v(static_cast<size_t>(M), 1.0);
+    for (int it = 0; it < 8; ++it) {
+        Vec c(static_cast<size_t>(M)), g(static_cast<size_t>(M));
+        double den = d[0] - lambda;
+        c[0] = M > 1 ? e[1] / den : 0.0;
+        g[0] = v[0] / den;
+        for (int i = 1; i < M; ++i) {
+            den = d[size_t(i)] - lambda - e[size_t(i)] * c[size_t(i) - 1];
+            c[size_t(i)] = i + 1 < M ? e[size_t(i) + 1] / den : 0.0;
+            g[size_t(i)] = (v[size_t(i)] - e[size_t(i)] * g[size_t(i) - 1]) / den;
+        }
+        v[size_t(M) - 1] = g[size_t(M) - 1];
+        for (int i = M - 2; i >= 0; --i) v[size_t(i)] = g[size_t(i)] - c[size_t(i)] * v[size_t(i) + 1];
+        double nrm = 0;
+        for (double x : v) nrm += x * x;
+        nrm = std::sqrt(nrm);
+        for (double &x : v) x /= nrm;
+    }
+    double sum = 0;
+    for (double x : v) sum += x;
+    if (sum < 0)
+        for (double &x : v) x = -x;
+    const double mx = *std::max_element(v.begin(), v.end());
+    for (double &x : v) x /= mx;
+    if (M % 2 == 0) {
+        const double corr = double(M) * M / (double(M) * M + NW);
+        for (double &x : v) x *= corr;
+    }
+    return v;
 }
 }  // namespace
 
@@ -84,6 +186,39 @@ Vec get_window(WindowType type, int M, double par) {
         }
         break;
     }
+    case WindowType::Barthann:
+        for (int n = 0; n < M; ++n) {
+            const double fac = std::fabs(n / (M - 1.0) - 0.5);
+            w[n] = 0.62 - 0.48 * fac + 0.38 * std::cos(2 * PI * fac);
+        }
+        break;
+    case WindowType::Bohman:
+        for (int n = 0; n < M; ++n) {
+            const double fac = std::fabs(-1.0 + 2.0 * n / (M - 1));
+            w[n] = n == 0 || n == M - 1 ? 0.0 : (1 - fac) * std::cos(PI * fac) + 1.0 / PI * std::sin(PI * fac);
+        }
+        break;
+    case WindowType::Cosine:
+        for (int n = 0; n < M; ++n) w[n] = std::sin(PI / M * (n + 0.5));
+        break;
+    case WindowType::Parzen:
+        for (int k = 0; k < M; ++k) {
+            const double n = std::fabs(-(M - 1) / 2.0 + k);
+            w[k] = n <= (M - 1) / 4.0 ? 1 - 6 * std::pow(n / (M / 2.0), 2) + 6 * std::pow(n / (M / 2.0), 3)
+                                      : 2 * std::pow(1 - n / (M / 2.0), 3);
+        }
+        break;
+    case WindowType::Triang: {
+        const int h = (M + 1) / 2;
+        for (int k = 1; k <= h; ++k) {
+            const double v = M % 2 == 0 ? (2.0 * k - 1) / M : 2.0 * k / (M + 1.0);
+            w[k - 1] = v;
+            w[M - k] = v;
+        }
+        break;
+    }
+    case WindowType::Chebwin: w = chebwin(M, par); break;
+    case WindowType::DPSS: w = dpss(M, par); break;
     }
     return w;
 }

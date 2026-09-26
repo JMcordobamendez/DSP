@@ -27,9 +27,9 @@ public:
     /// Take over order, corner frequencies etc. calculated by the design
     void updateFromDesign(const pyfda::FilterSpec &s);
     void setStatus(const QString &text, bool error);
-    /// Show the specifications of a loaded filter, unit is "f_S", "Hz", "kHz" or "MHz"
+    /// Show the specifications of a loaded filter, unit is "f_S", "f_Ny", "mHz", "Hz", "kHz", "MHz" or "GHz"
     void setSpec(const pyfda::FilterSpec &s, const QString &unit);
-    /// Frequency unit as stored in filter files ("f_S", "Hz", "kHz", "MHz")
+    /// Frequency unit as stored in filter files ("f_S", "f_Ny", "mHz", "Hz", ...)
     QString unitKey() const;
     /// Switch to the "Manual" method with coefficients / poles and zeros entered by hand
     void setManual(const pyfda::FilterSpec &manual, bool fir);
@@ -66,7 +66,8 @@ private:
     static double parse(const QLineEdit *e, const QString &name);
     static QString fmt(double v);
 
-    QComboBox *m_rt, *m_ft, *m_method, *m_unit, *m_window, *m_alg;
+    QComboBox *m_rt, *m_ft, *m_method, *m_unit, *m_window, *m_alg, *m_amp_unit;
+    int m_amp_unit_prev = 0;
     QRadioButton *m_min, *m_man;
     QSpinBox *m_N, *m_stages;
     QCheckBox *m_norm;

@@ -124,12 +124,21 @@ WINDOWS = {'rectangular': lambda M, p: sig.get_window('boxcar', M, False),
            'flattop': lambda M, p: sig.get_window('flattop', M, False),
            'kaiser': lambda M, p: sig.get_window(('kaiser', p), M, False),
            'gaussian': lambda M, p: sig.get_window(('gaussian', p * (M - 1) / 2), M, False),
-           'tukey': lambda M, p: sig.get_window(('tukey', p), M, False)}
+           'tukey': lambda M, p: sig.get_window(('tukey', p), M, False),
+           'bartlett-hann': lambda M, p: sig.get_window('barthann', M, False),
+           'bohman': lambda M, p: sig.get_window('bohman', M, False),
+           'cosine': lambda M, p: sig.get_window('cosine', M, False),
+           'parzen': lambda M, p: sig.get_window('parzen', M, False),
+           'triangular': lambda M, p: sig.get_window('triang', M, False),
+           'dolph-chebyshev': lambda M, p: sig.get_window(('chebwin', p), M, False),
+           'dpss': lambda M, p: sig.get_window(('dpss', p), M, False)}
 for wname, fn in WINDOWS.items():
-    for M in (2, 7, 32, 101):
-        par = {'kaiser': 6.5, 'gaussian': 0.4, 'tukey': 0.3}.get(wname, 0)
+    for M in (2, 7, 32, 101, 256):
+        par = {'kaiser': 6.5, 'gaussian': 0.4, 'tukey': 0.3, 'dolph-chebyshev': 80, 'dpss': 3.0}.get(wname, 0)
+        if wname == 'dpss' and M == 2:
+            par = 0.5
         r = call(f"window {wname} {M} {par}")
-        close(f"window {wname} M={M}", r['w'], fn(M, par), 1e-12, 1e-15)
+        close(f"window {wname} M={M}", r['w'], fn(M, par), 1e-9 if wname == 'dpss' else 1e-12, 1e-15)
 
 for numtaps, cutoff, pz in ((31, [0.3], 1), (32, [0.3], 1), (41, [0.4], 0),
                             (51, [0.2, 0.5], 0), (61, [0.2, 0.5], 1), (80, [0.1, 0.3], 0)):
@@ -891,6 +900,33 @@ for mode in ("psd", "magnitude", "angle"):
                 check(name, got.shape == S.shape and np.allclose(np.exp(1j * got[m]), np.exp(1j * S[m]), atol=1e-8))
             else:
                 close(name, got, S, 1e-9)
+
+# ---- amplitude units (pyfda special_functions.unit2lin / lin2unit) ----
+def lin2unit(lin, fir, pb, unit):
+    if unit == 'dB':
+        if pb:
+            return -20 * np.log10(1 - lin) if not fir else 20 * np.log10((1 + lin) / (1 - lin))
+        return -20 * np.log10(lin)
+    return lin * lin if unit == 'W' else lin
+
+
+def unit2lin(v, fir, pb, unit):
+    if unit == 'dB':
+        if pb:
+            return 1 - 10 ** (-v / 20) if not fir else (10 ** (v / 20) - 1) / (10 ** (v / 20) + 1)
+        return 10 ** (-v / 20)
+    return np.sqrt(v) if unit == 'W' else v
+
+
+for fir in (0, 1):
+    for pb in (0, 1):
+        for db in (0.1, 1, 3, 40, 80):
+            for unit in ('V', 'W'):
+                ref = lin2unit(unit2lin(db, fir, pb, 'dB'), fir, pb, unit)
+                r = call(f"amp from {db} {unit} {fir} {pb}")
+                close(f"amp from dB {db} {unit} fir={fir} pb={pb}", r['v'], ref, 1e-12)
+                r = call(f"amp to {ref!r} {unit} {fir} {pb}")
+                close(f"amp to dB {unit} fir={fir} pb={pb}", r['v'], db, 1e-10)
 
 proc.stdin.close()
 proc.wait()

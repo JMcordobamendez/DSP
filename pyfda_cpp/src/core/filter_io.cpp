@@ -402,7 +402,8 @@ FilterFile filter_from_json(const std::string &text) {
         else if (k == "order_alg") s.order_alg = order_alg_from_key(as_str(v, k));
         // unknown keys are ignored for forward compatibility
     }
-    if (f.unit != "f_S" && f.unit != "Hz" && f.unit != "kHz" && f.unit != "MHz")
+    if (f.unit != "f_S" && f.unit != "f_Ny" && f.unit != "mHz" && f.unit != "Hz" && f.unit != "kHz" &&
+        f.unit != "MHz" && f.unit != "GHz")
         throw DesignError("Invalid filter file: unknown unit '" + f.unit + "'");
     if (!(s.f_s > 0)) throw DesignError("Invalid filter file: f_S must be > 0");
     if (s.N < (is_manual(s.method) ? 0 : 1)) throw DesignError("Invalid filter file: N must be >= 1");

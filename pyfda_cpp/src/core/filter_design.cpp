@@ -51,6 +51,21 @@ double fir_a_pb_lin(double A) {
 
 double sb_lin(double A) { return std::pow(10.0, -A / 20.0); }
 
+double amp_to_db(double v, AmpUnit unit, bool fir, bool pb) {
+    if (unit == AmpUnit::dB) return v;
+    const double lin = unit == AmpUnit::W ? std::sqrt(std::fabs(v)) : std::fabs(v);
+    if (!(lin > 0 && lin < 1))
+        throw DesignError(std::string(pb ? "A_PB" : "A_SB") + " must be between 0 and 1 in V / W.");
+    if (!pb) return -20 * std::log10(lin);
+    return fir ? 20 * std::log10((1 + lin) / (1 - lin)) : -20 * std::log10(1 - lin);
+}
+
+double amp_from_db(double db, AmpUnit unit, bool fir, bool pb) {
+    if (unit == AmpUnit::dB) return db;
+    const double lin = !pb ? std::pow(10.0, -db / 20) : fir ? fir_a_pb_lin(db) : 1 - std::pow(10.0, -db / 20);
+    return unit == AmpUnit::W ? lin * lin : lin;
+}
+
 namespace {
 
 BType btype(RespType rt) {
