@@ -142,6 +142,8 @@ int main(int argc, char *argv[]) {
     if (parser.isSet(optShot)) {
         const QString dir = parser.value(optShot);
         QDir().mkpath(dir);
+        w.resize(1600, 1000);
+        app.processEvents();
         for (int i = 0; i < w.tabs()->count(); ++i) {
             w.tabs()->setCurrentIndex(i);
             app.processEvents();

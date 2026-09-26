@@ -6,6 +6,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QVBoxLayout>
@@ -51,14 +52,25 @@ MagnitudeView::MagnitudeView(QWidget *parent) : PlotView(parent) {
     m_unit->addItems({"dB", "V", "W"});
     m_unit->setToolTip(tr("Unit of the magnitude: dB, linear (V) or squared (W)"));
     m_specs = new QCheckBox(tr("Specs"), this);
-    m_specs->setChecked(true);
+    m_specs->setChecked(false);  // off by default like in pyfda
     m_specs->setToolTip(tr("Show the specifications (forbidden regions are shaded)"));
+    m_min = new QDoubleSpinBox(this);
+    m_min->setRange(-1000, 0);
+    m_min->setDecimals(1);
+    m_min->setSingleStep(10);
+    m_min->setValue(-80);  // pyfda's default
+    m_min->setSuffix(" dB");
+    m_min->setToolTip(tr("Lower limit of the plot in dB"));
+    m_lmin = new QLabel(tr("min ="), this);
     m_controls->addWidget(new QLabel(tr("Unit:"), this));
     m_controls->addWidget(m_unit);
+    m_controls->addWidget(m_lmin);
+    m_controls->addWidget(m_min);
     m_controls->addWidget(m_specs);
     m_controls->addStretch(1);
     connect(m_unit, &QComboBox::currentIndexChanged, this, [this] { m_plot->keepView(false); redrawNow(); });
     connect(m_specs, &QCheckBox::toggled, this, [this] { redrawNow(); });
+    connect(m_min, &QDoubleSpinBox::valueChanged, this, [this] { m_plot->keepView(false); redrawNow(); });
 }
 
 void MagnitudeView::redraw() {
@@ -73,6 +85,8 @@ void MagnitudeView::redraw() {
     freqAxis(N_FREQ, f, w);
     const CVec H = response(w);
     const int unit = m_unit->currentIndex();
+    m_min->setVisible(unit == 0);
+    m_lmin->setVisible(unit == 0);
     QVector<double> y(N_FREQ);
     for (int i = 0; i < N_FREQ; ++i) {
         const double a = std::abs(H[i]);
@@ -105,9 +119,7 @@ void MagnitudeView::redraw() {
     m_plot->setYLabel(unit == 0 ? "|H(f)| / dB" : unit == 1 ? "|H(f)|" : "|H(f)|²");
     m_plot->setXLimits(0, m_ctx.f_s / 2);
     if (unit == 0) {
-        const double mx = *std::max_element(y.begin(), y.end());
-        const double floor_db = std::max(-std::max(s.A_SB, 40.0) - 40, mx - 200);
-        m_plot->setYLimits(floor_db, std::numeric_limits<double>::quiet_NaN());
+        m_plot->setYLimits(m_min->value(), std::numeric_limits<double>::quiet_NaN());
     }
     m_plot->autoscale();
 }

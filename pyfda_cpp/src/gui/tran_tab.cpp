@@ -202,7 +202,7 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     m_N->setValue(0);
     m_N->setSpecialValueText(tr("auto"));
     m_N->setToolTip(tr("<span>Number of displayed data points N (0 = auto: length of the impulse response, "
-                       "at least 100)</span>"));
+                       "for IIR filters until it has decayed to -40 dB)</span>"));
     m_N_start = new QSpinBox(this);
     m_N_start->setRange(0, 10000000);
     m_N_start->setToolTip(tr("Index of the first displayed data point; the spectra are calculated from "
@@ -634,7 +634,15 @@ void TranView::calc() {
     m_cmplx = false;
     if (!m_design) return;
     int N = m_N->value();
-    if (N == 0) N = std::max(100, m_design->fir ? int(m_design->ba.b.size()) + 5 : impz_len(m_design->zpk));
+    if (N == 0) {
+        // like pyfda (impz_len): FIR number of taps, IIR decay of the dominant pole to -40 dB
+        double r_max = 0;
+        for (const cplx &p : m_design->zpk.p) r_max = std::max(r_max, std::abs(p));
+        if (m_design->fir) N = int(m_design->ba.b.size());
+        else if (r_max >= 1) N = 100;
+        else N = int(std::lround(40.0 / 20 * std::log(10.0) / (1 - r_max)));
+        N = std::max(N, 1);
+    }
     if (m_N->value() == 0 && m_p.stim == Stim::File && m_p.x_file) N = std::max(1, int(m_p.x_file->size()));
     m_n_start = m_N_start->value();
     const int n_end = m_n_start + N;

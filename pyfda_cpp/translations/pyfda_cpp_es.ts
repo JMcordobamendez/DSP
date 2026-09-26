@@ -716,8 +716,13 @@
     </message>
     <message>
       <location filename="../src/gui/info_tab.cpp" />
-      <source>No band edge specifications (manual order / manual filter).</source>
-      <translation>Sin especificaciones de bordes de banda (orden manual / filtro manual).</translation>
+      <source>Manual order: the band edge specifications are only a reference, increase the order N to meet them.</source>
+      <translation>Orden manual: las especificaciones de los bordes de banda son solo una referencia; aumenta el orden N para cumplirlas.</translation>
+    </message>
+    <message>
+      <location filename="../src/gui/info_tab.cpp" />
+      <source>No band edge specifications (manual filter).</source>
+      <translation>Sin especificaciones de bordes de banda (filtro manual).</translation>
     </message>
     <message>
       <location filename="../src/gui/main_window.cpp" />
@@ -1026,8 +1031,8 @@
     </message>
     <message>
       <location filename="../src/gui/plot_3d.cpp" />
-      <source>Surface</source>
-      <translation>Superficie</translation>
+      <source>None</source>
+      <translation>Ninguna</translation>
     </message>
     <message>
       <location filename="../src/gui/plot_3d.cpp" />
@@ -1036,8 +1041,8 @@
     </message>
     <message>
       <location filename="../src/gui/plot_3d.cpp" />
-      <source>None</source>
-      <translation>Ninguna</translation>
+      <source>Surface</source>
+      <translation>Superficie</translation>
     </message>
     <message>
       <location filename="../src/gui/plot_3d.cpp" />
@@ -1113,6 +1118,16 @@
       <location filename="../src/gui/response_tabs.cpp" />
       <source>Show the specifications (forbidden regions are shaded)</source>
       <translation>Mostrar las especificaciones (las zonas prohibidas se sombrean)</translation>
+    </message>
+    <message>
+      <location filename="../src/gui/response_tabs.cpp" />
+      <source>Lower limit of the plot in dB</source>
+      <translation>Límite inferior de la gráfica en dB</translation>
+    </message>
+    <message>
+      <location filename="../src/gui/response_tabs.cpp" />
+      <source>min =</source>
+      <translation>mín =</translation>
     </message>
     <message>
       <location filename="../src/gui/response_tabs.cpp" />
@@ -1721,8 +1736,8 @@
     </message>
     <message>
       <location filename="../src/gui/tran_tab.cpp" />
-      <source>&lt;span&gt;Number of displayed data points N (0 = auto: length of the impulse response, at least 100)&lt;/span&gt;</source>
-      <translation>&lt;span&gt;Número de puntos mostrados N (0 = auto: longitud de la respuesta al impulso, al menos 100)&lt;/span&gt;</translation>
+      <source>&lt;span&gt;Number of displayed data points N (0 = auto: length of the impulse response, for IIR filters until it has decayed to -40 dB)&lt;/span&gt;</source>
+      <translation>&lt;span&gt;Número de puntos mostrados N (0 = auto: longitud de la respuesta al impulso; en filtros IIR, hasta que decae a -40 dB)&lt;/span&gt;</translation>
     </message>
     <message>
       <location filename="../src/gui/tran_tab.cpp" />

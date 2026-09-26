@@ -67,7 +67,7 @@ private:
     QVector<Marker> m_markers;
     double m_xmin = -1, m_xmax = 1, m_ymin = -1, m_ymax = 1, m_zmin = 0, m_zmax = 1;
     QString m_zlabel, m_title;
-    double m_azim = -60, m_elev = 30, m_zoom = 1;  // degrees, like matplotlib's default view
+    double m_azim = -65, m_elev = 30, m_zoom = 1;  // degrees, pyfda's default view
     QPoint m_last;
 };
 

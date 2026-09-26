@@ -7,6 +7,8 @@
 class PlotWidget;
 class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
+class QLabel;
 class QHBoxLayout;
 
 /// Base with a control row above a plot
@@ -34,6 +36,8 @@ protected:
 private:
     QComboBox *m_unit;
     QCheckBox *m_specs;
+    QDoubleSpinBox *m_min;
+    QLabel *m_lmin;
 };
 
 class PhaseView : public PlotView {

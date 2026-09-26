@@ -51,10 +51,10 @@ PlotWidget::PlotWidget(QWidget *parent) : QWidget(parent) {
 }
 
 QColor PlotWidget::color(int i) {
-    static const QColor cycle[] = {QColor(31, 119, 180), QColor(255, 127, 14), QColor(44, 160, 44),
-                                   QColor(214, 39, 40),  QColor(148, 103, 189), QColor(140, 86, 75),
-                                   QColor(227, 119, 194), QColor(127, 127, 127)};
-    return cycle[((i % 8) + 8) % 8];
+    // pyfda's color cycle (light theme): r, b, c, m, k
+    static const QColor cycle[] = {QColor(255, 0, 0), QColor(0, 0, 255), QColor(0, 191, 191), QColor(191, 0, 191),
+                                   QColor(0, 0, 0)};
+    return cycle[((i % 5) + 5) % 5];
 }
 
 void PlotWidget::setImage(const QImage &img, double x0, double x1, double y0, double y1, double zlo, double zhi,

@@ -86,7 +86,7 @@ void Plot3D::setRange(double xmin, double xmax, double ymin, double ymax, double
 }
 
 void Plot3D::resetView() {
-    m_azim = -60;
+    m_azim = -65;  // pyfda's view
     m_elev = 30;
     m_zoom = 1;
     update();
@@ -97,9 +97,10 @@ Plot3D::R3 Plot3D::rotate(const P3 &p) const {
     const double yn = (2 * p.y - m_ymin - m_ymax) / (m_ymax - m_ymin);
     const double zn = ((p.z - m_zmin) / (m_zmax - m_zmin) - 0.5) * Z_HEIGHT;
     const double a = m_azim * DEG, e = m_elev * DEG;
-    // azimuth around the z axis, then tilt by the elevation (camera above the xy plane)
-    const double x1 = xn * std::cos(a) + yn * std::sin(a);
-    const double y1 = -xn * std::sin(a) + yn * std::cos(a);  // away from the viewer
+    // azimuth around the z axis like matplotlib (camera in the direction (cos a, sin a)),
+    // then tilt by the elevation (camera above the xy plane)
+    const double x1 = -xn * std::sin(a) + yn * std::cos(a);
+    const double y1 = -xn * std::cos(a) - yn * std::sin(a);  // away from the viewer
     return {x1, zn * std::cos(e) + y1 * std::sin(e), -y1 * std::cos(e) + zn * std::sin(e)};
 }
 
@@ -218,11 +219,11 @@ void Plot3D::paintEvent(QPaintEvent *) {
             prims.push_back({d, 1, l, i});
         }
     for (int i = 0; i < m_markers.size(); ++i) prims.push_back({rotate(m_markers[i].p).depth + 0.02, 2, i, 0});
-    std::sort(prims.begin(), prims.end(), [](const Prim &x, const Prim &y) { return x.depth < y.depth; });
+    std::stable_sort(prims.begin(), prims.end(), [](const Prim &x, const Prim &y) { return x.depth < y.depth; });
 
     // light from the viewer's upper left for the shading of the surface
-    const double la = (m_azim + 45) * DEG;
-    const double lx = -std::sin(la) * 0.5, ly = -std::cos(la) * 0.5, lz = 0.8;
+    const double la = (m_azim - 45) * DEG;
+    const double lx = std::cos(la) * 0.5, ly = std::sin(la) * 0.5, lz = 0.8;
     const double ll = std::sqrt(lx * lx + ly * ly + lz * lz);
     QColor mesh = fg;
     mesh.setAlpha(90);
@@ -344,7 +345,7 @@ ThreeDView::ThreeDView(QWidget *parent) : DesignView(parent) {
     lay->setContentsMargins(4, 4, 4, 4);
     auto *row = new QHBoxLayout();
     m_mode = new QComboBox(this);
-    m_mode->addItems({tr("Surface"), tr("Mesh"), tr("None")});
+    m_mode->addItems({tr("None"), tr("Mesh"), tr("Surface")});  // order and default like pyfda
     m_mode->setToolTip(tr("Display |H(z)| as colored surface, as wire mesh or not at all"));
     m_log = new QCheckBox("dB", this);
     m_log->setToolTip(tr("Logarithmic scale"));
@@ -440,9 +441,10 @@ void ThreeDView::redraw() {
     auto clip = [&](double m) { return std::clamp(std::isfinite(m) ? val(m) : top, bottom, top); };
 
     // surface
+    enum { None, Mesh, Surface };
     const int mode = m_mode->currentIndex();
     const bool polar = m_polar->isChecked();
-    if (mode < 2) {
+    if (mode != None) {
         QVector<Plot3D::P3> grid;
         int nu, nv;
         if (polar) {  // radius x angle
@@ -461,7 +463,7 @@ void ThreeDView::redraw() {
                     grid << Plot3D::P3{z.real(), z.imag(), clip(h_mag_z(ba, z))};
                 }
         }
-        m_plot->setSurface(grid, nu, nv, mode == 0, polar);
+        m_plot->setSurface(grid, nu, nv, mode == Surface, polar);
     }
 
     QVector<Plot3D::Line> lines;
@@ -476,8 +478,18 @@ void ThreeDView::redraw() {
         Plot3D::Line l;
         for (int i = 0; i <= n_uc; ++i) l.pts << Plot3D::P3{uc[i].real(), uc[i].imag(), clip(h_uc[size_t(i)])};
         l.color = PlotWidget::color(0);
-        l.width = 3;
+        l.width = 4;
         lines << l;
+        // white dashes on top like pyfda (as separate pieces: the painter's algorithm draws
+        // the line segment by segment, so a dashed pen would restart on every segment)
+        const int dash = std::max(1, n_uc / 72);
+        for (int i = 0; i + dash <= n_uc; i += 2 * dash) {
+            Plot3D::Line w;
+            for (int k = i; k <= i + dash; ++k) w.pts << l.pts[k];
+            w.color = Qt::white;
+            w.width = 2;
+            lines << w;
+        }
         // thin vertical lines from the bottom to |H(f)|
         for (int i = 0; i < n_uc; i += 10) {
             Plot3D::Line v;
@@ -490,8 +502,8 @@ void ThreeDView::redraw() {
     if (m_pz->isChecked()) {
         const double span = top - bottom;
         const double zlevel = bottom + 0.1 * span;                  // height of the zero markers
-        const double plevel_btm = mode == 2 ? bottom : top;         // pole stems start at the top
-        const double plevel_top = mode == 2 ? bottom + 0.1 * span : top + 0.05 * span;
+        const double plevel_btm = mode == None ? bottom : top;         // pole stems start at the top
+        const double plevel_top = mode == None ? bottom + 0.1 * span : top + 0.05 * span;
         auto inside = [](const cplx &z) { return std::fabs(z.real()) <= 1.5 && std::fabs(z.imag()) <= 1.5; };
         for (const cplx &z : m_design->zpk.z) {
             if (!inside(z)) continue;
@@ -514,7 +526,7 @@ void ThreeDView::redraw() {
     m_plot->setMarkers(markers);
     m_plot->setColorbar(m_cbar->isChecked());
     // the box includes the pole markers above the top
-    const double zmax = m_pz->isChecked() && mode != 2 && !m_design->zpk.p.empty() ? top + 0.05 * (top - bottom) : top;
+    const double zmax = m_pz->isChecked() && mode != None && !m_design->zpk.p.empty() ? top + 0.05 * (top - bottom) : top;
     m_plot->setRange(-1.5, 1.5, -1.5, 1.5, bottom, zmax, log ? "|H| / dB" : "|H|");
     m_plot->update();
 }

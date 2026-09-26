@@ -388,7 +388,9 @@ FilterFile filter_from_json(const std::string &text) {
         else if (k == "method") s.method = method_from_key(as_str(v, k));
         else if (k == "order") {
             const std::string o = as_str(v, k);
-            if (o != "min" && o != "manual") throw DesignError("Invalid filter file: order must be 'min' or 'manual'");
+            // "man" is pyfda's key
+            if (o != "min" && o != "manual" && o != "man")
+                throw DesignError("Invalid filter file: order must be 'min' or 'manual'");
             s.fo = o == "min" ? OrderMode::Min : OrderMode::Manual;
         } else if (k == "N") s.N = int(as_num(v, k));
         else if (k == "grid_density") s.grid_density = int(as_num(v, k));

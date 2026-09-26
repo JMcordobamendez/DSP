@@ -50,12 +50,11 @@ FilterInfo filter_info(const FilterDesign &d) {
     const Vec all = mag_db(d, 0, 0.5, 4096);
     fi.h_max_db = *std::max_element(all.begin(), all.end());
 
-    // band edge specs exist for minimum order designs and manual order equiripple filters
+    // like pyfda's Info tab, the band edge specs are also checked for manual order designs
+    // (there they are only a reference); not for manual filters and MA band pass / stop
     if (is_manual(s.method)) return fi;
     const bool ma = s.method == DesignMethod::MovingAverage;
-    const bool edges = (s.fo == OrderMode::Min && !(ma && (s.rt == RespType::BP || s.rt == RespType::BS))) ||
-                       s.method == DesignMethod::Equiripple;
-    if (!edges) return fi;
+    if (ma && (s.rt == RespType::BP || s.rt == RespType::BS)) return fi;
     const double fs = s.f_s;
     auto add = [&](const char *name, double f0, double f1, bool pass) {
         if (!(f1 > f0)) return;

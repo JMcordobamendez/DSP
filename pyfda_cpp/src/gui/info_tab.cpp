@@ -59,11 +59,14 @@ void InfoView::redraw() {
         h += "</table>";
         bool all = true;
         for (const BandCheck &b : fi.bands) all = all && b.ok;
-        if (!all)
+        if (!all && s.fo == OrderMode::Min)
             h += "<p>" + tr("The minimum order estimate isn't always sufficient (e.g. for equiripple filters), "
                             "increase the order or relax the specs.") + "</p>";
+        else if (!all)
+            h += "<p>" + tr("Manual order: the band edge specifications are only a reference, "
+                            "increase the order N to meet them.") + "</p>";
     } else {
-        h += "<p>" + tr("No band edge specifications (manual order / manual filter).") + "</p>";
+        h += "<p>" + tr("No band edge specifications (manual filter).") + "</p>";
     }
     m_text->setHtml(h);
 }
