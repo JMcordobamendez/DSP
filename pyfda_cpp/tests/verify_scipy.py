@@ -851,6 +851,8 @@ try:
     import numexpr
 except ImportError:
     numexpr = None
+if os.environ.get("NO_NUMEXPR"):
+    numexpr = None
 formulas = [
     "A1 * abs(sin(2 * pi * f1 * n))",
     "A1 * sin(2*pi*f1*n + phi1/180*pi) + A2 * cos(2*pi*f2*n)",
@@ -872,7 +874,7 @@ for fo in formulas:
     if numexpr is not None:
         ref = numexpr.evaluate(fo, local_dict=ld).astype(float)
     else:
-        ref = eval(fo.replace("arctan2", "np.arctan2"), {k: getattr(np, k) for k in dir(np)}, ld)
+        ref = eval(fo, {k: getattr(np, k) for k in dir(np) if not k.startswith('_')}, ld)
     close(f"formula {fo}", r['x'], np.broadcast_to(ref, n.shape), 1e-12, 1e-14)
 for bad in ("sin(n", "foo(n)", "n +* 2", "q * 2", "3 * j", ""):
     r = call(f"stim 8 formula={bad}")
