@@ -210,6 +210,22 @@ y ceros complejos mueven también su pareja conjugada y los reales se quedan en 
 real. Ctrl + arrastrar desplaza la vista. `--drag-pz i:re:im` hace lo mismo desde la línea
 de comandos (para las pruebas).
 
+## Fase 13: interfaz en español
+
+La interfaz está en inglés y en español. Por defecto se usa el idioma del sistema
+(*Automático*); en **Archivo → Preferencias → Idioma** se elige otro, que se aplica al
+volver a abrir el programa (`[ui] language = auto | en | es` en el fichero de
+configuración, o `--lang es` en la línea de comandos). Los diálogos estándar de Qt
+(Aceptar, Cancelar, ...) también salen en español en el ejecutable de Windows.
+
+Las traducciones están en `translations/pyfda_cpp_es.ts` (formato de Qt Linguist), que
+se compila dentro del ejecutable y se lee directamente, sin `lrelease`. Tras cambiar
+textos en la interfaz, `python3 tools/update_ts.py` añade las frases nuevas como
+pendientes y quita las que ya no se usan; `--check` (en la CI) falla si queda alguna sin
+traducir o si no cuadran los `%1`, `%2`, ... Los nombres de los métodos de diseño y de
+las ventanas (Butterworth, Kaiser, ...) y las descripciones del filtro diseñado
+("Elliptic Lowpass, N = 6") se quedan como en pyfda.
+
 ## Verificación
 
 ```
@@ -241,11 +257,7 @@ Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 `--save-filter f.json`, `--stim sine`, `--formula "sin(2*pi*f1*n)"`, `--stim-file x.csv`, `--tran-export t.csv`, `--fixpoint`,
 `--export-hdl filtro.vhd|.v|.coe`, `--hdl-testbench`, `--data fichero`,
 `--filter`, `--export salida.csv`, `--manual-ba "1,2,1/1,-0.5"`,
-`--manual-zpk "0.5:0.5,0.5:-0.5/0.9/2"`, `--screenshot carpeta`, `--config-dir carpeta`, `--quit`, `--drag-pz 7:0.8:0.3`.
-
-## Pendiente para siguientes fases
-
-* Traducciones.
+`--manual-zpk "0.5:0.5,0.5:-0.5/0.9/2"`, `--screenshot carpeta`, `--config-dir carpeta`, `--quit`, `--drag-pz 7:0.8:0.3`, `--lang es`.
 
 ## Licencias
 

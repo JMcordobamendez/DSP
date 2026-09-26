@@ -39,6 +39,7 @@ target_link_libraries(pyfda_cli PRIVATE pyfda_core)
 
 if(PYFDA_BUILD_GUI)
     set(CMAKE_AUTOMOC ON)
+    set(CMAKE_AUTORCC ON)
     find_package(Qt6 REQUIRED COMPONENTS Widgets)
     add_executable(pyfda_cpp WIN32
         src/gui/main.cpp
@@ -53,6 +54,8 @@ if(PYFDA_BUILD_GUI)
         src/gui/window_viewer.cpp
         src/gui/plot_3d.cpp
         src/gui/fixpoint_tab.cpp
+        src/gui/translator.cpp
+        translations/translations.qrc
         src/gui/coeffs_tab.hpp
         src/gui/data_filt_tab.hpp
         src/gui/design_view.hpp
@@ -67,6 +70,7 @@ if(PYFDA_BUILD_GUI)
         src/gui/fixpoint_tab.hpp
         src/gui/settings.hpp
         src/gui/plot_3d.hpp
+        src/gui/translator.hpp
     )
     target_link_libraries(pyfda_cpp PRIVATE pyfda_core Qt6::Widgets)
     install(TARGETS pyfda_cpp RUNTIME DESTINATION .)

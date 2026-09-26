@@ -12,6 +12,7 @@
 #include "spec_panel.hpp"
 #include "settings.hpp"
 #include "tran_tab.hpp"
+#include "translator.hpp"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -299,6 +300,12 @@ void MainWindow::preferences() {
     auto *restore = new QCheckBox(tr("Restore the design and the window of the last session"), &dlg);
     restore->setChecked(config::restoreSession());
     form->addRow(tr("Start:"), restore);
+    auto *lang = new QComboBox(&dlg);
+    lang->addItem(tr("Automatic (system language)"), "auto");
+    for (const QString &l : i18n::languages()) lang->addItem(i18n::languageName(l), l);
+    lang->setCurrentIndex(qMax(0, lang->findData(config::language())));
+    lang->setToolTip(tr("Takes effect the next time the program starts"));
+    form->addRow(tr("Language:"), lang);
     auto *delim = new QComboBox(&dlg);
     delim->addItem(tr("Comma ,"), "comma");
     delim->addItem(tr("Semicolon ;"), "semicolon");
@@ -322,6 +329,10 @@ void MainWindow::preferences() {
     form->addRow(buttons);
     if (dlg.exec() != QDialog::Accepted) return;
     s.setValue("session/restore", restore->isChecked());
+    if (lang->currentData() != config::language()) {
+        s.setValue("ui/language", lang->currentData());
+        Logger::info(tr("The language changes the next time the program starts."));
+    }
     s.setValue("csv/delimiter", delim->currentData());
     s.setValue("csv/decimal_comma", comma->isChecked());
 }

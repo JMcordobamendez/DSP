@@ -19,13 +19,16 @@
 //   --drag-pz <i:re:im>    move pole / zero i (zeros first, then poles) in the P/Z tab like with the mouse
 //   --config-dir <dir>     directory of the configuration (default: the user's config directory),
 //                          the INI file is <dir>/pyfda/pyfda_cpp.ini
+//   --lang <auto|en|es>    language of the user interface (default: setting ui/language, auto)
 //   --quit                 close the window right away like the user (saves the session)
 #include "coeffs_tab.hpp"
 #include "data_filt_tab.hpp"
 #include "fixpoint_tab.hpp"
 #include "main_window.hpp"
 #include "response_tabs.hpp"
+#include "settings.hpp"
 #include "tran_tab.hpp"
+#include "translator.hpp"
 #include "window_viewer.hpp"
 
 #include <QApplication>
@@ -66,12 +69,14 @@ int main(int argc, char *argv[]) {
                                                "e.g. 0.5:0.5,0.5:-0.5/0.9/2.", "z/p/k");
     QCommandLineOption optConf("config-dir", "Directory of the configuration file.", "dir");
     QCommandLineOption optDrag("drag-pz", "Move pole / zero i to re + j im in the P/Z tab, e.g. 0:0.5:0.6.", "i:re:im");
+    QCommandLineOption optLang("lang", "Language of the user interface: auto, en or es.", "lang");
     QCommandLineOption optQuit("quit", "Close the main window right away (saves the session).");
-    parser.addOptions({optConf, optQuit, optDrag, optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp, optFix,
+    parser.addOptions({optConf, optLang, optQuit, optDrag, optData, optFilter, optExport, optShot, optLoadFilt, optSaveFilt, optStim, optTranExp, optFix,
                        optHdl, optTb, optManBa, optManZpk, optFormula, optStimFile});
     parser.process(app);
     if (parser.isSet(optConf))
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QDir(parser.value(optConf)).absolutePath());
+    i18n::install(parser.isSet(optLang) ? parser.value(optLang) : config::language());
 
     MainWindow w;
     w.show();

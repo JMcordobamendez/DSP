@@ -3,6 +3,7 @@
 //   [session]  restore = true: reload the last design on start (pyfda_cpp_session.json
 //              next to the INI file), geometry, splitters and current tab of the window
 //   [dirs]     last directories of the file dialogs: filter, data, export
+//   [ui]       language = auto | en | es: language of the user interface (auto: system language)
 //   [csv]      delimiter = comma | semicolon | tab, decimal_comma = false: format of exported
 //              CSV files (filtered data, transient data, coefficient table)
 #pragma once
@@ -32,6 +33,9 @@ inline QString dir(const QString &key) { return QSettings().value("dirs/" + key)
 inline void setDir(const QString &key, const QString &file) {
     if (!file.isEmpty()) QSettings().setValue("dirs/" + key, QFileInfo(file).absolutePath());
 }
+
+/// Language of the user interface, "auto" (system language), "en", "es"
+inline QString language() { return QSettings().value("ui/language", "auto").toString(); }
 
 inline pyfda::CsvFormat csvFormat() {
     QSettings s;

@@ -70,6 +70,14 @@ QString fmtCplx(double re, double im) {
 }
 }  // namespace
 
+// display names of the stimuli (stim_list()) for tools/update_ts.py
+[[maybe_unused]] const char *const STIM_NAMES[] = {
+    QT_TR_NOOP("None"),     QT_TR_NOOP("Dirac"),    QT_TR_NOOP("Sinc"),      QT_TR_NOOP("Gauss"),
+    QT_TR_NOOP("Rect"),     QT_TR_NOOP("Step"),     QT_TR_NOOP("Sine"),      QT_TR_NOOP("Cos"),
+    QT_TR_NOOP("Exp (complex)"), QT_TR_NOOP("Diric"), QT_TR_NOOP("Chirp"),   QT_TR_NOOP("Triangle"),
+    QT_TR_NOOP("Sawtooth"), QT_TR_NOOP("Rect (periodic)"), QT_TR_NOOP("Comb"), QT_TR_NOOP("AM"),
+    QT_TR_NOOP("PM / FM"),  QT_TR_NOOP("PWM"),      QT_TR_NOOP("Formula"),   QT_TR_NOOP("File")};
+
 TranView::TranView(QWidget *parent) : DesignView(parent) {
     auto *lay = new QVBoxLayout(this);
     lay->setContentsMargins(4, 4, 4, 4);
@@ -77,7 +85,7 @@ TranView::TranView(QWidget *parent) : DesignView(parent) {
     // --- row 1: stimulus selection
     auto *r1 = new QHBoxLayout();
     m_stim = new QComboBox(this);
-    for (const auto &s : stim_list()) m_stim->addItem(s.name, int(s.stim));
+    for (const auto &s : stim_list()) m_stim->addItem(tr(s.name), int(s.stim));
     m_stim->setCurrentIndex(m_stim->findData(int(Stim::Dirac)));
     m_stim->setToolTip(tr("Stimulus x[n]"));
     m_chirp = new QComboBox(this);
