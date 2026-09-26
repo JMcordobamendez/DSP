@@ -1,6 +1,7 @@
 #include "filter_design.hpp"
 
 #include "conversions.hpp"
+#include "poly.hpp"
 
 #include <cmath>
 #include <sstream>
@@ -26,11 +27,22 @@ const char *method_name(DesignMethod m) {
     case DesignMethod::Bessel: return "Bessel";
     case DesignMethod::Firwin: return "Windowed FIR";
     case DesignMethod::Equiripple: return "Equiripple";
+    case DesignMethod::MovingAverage: return "Moving Average";
+    case DesignMethod::Delay: return "Delay";
+    case DesignMethod::ManualFIR:
+    case DesignMethod::ManualIIR: return "Manual";
     }
     return "";
 }
 
-bool is_fir(DesignMethod m) { return m == DesignMethod::Firwin || m == DesignMethod::Equiripple; }
+bool is_fir(DesignMethod m) {
+    return m == DesignMethod::Firwin || m == DesignMethod::Equiripple || m == DesignMethod::MovingAverage ||
+           m == DesignMethod::Delay || m == DesignMethod::ManualFIR;
+}
+
+bool is_manual(DesignMethod m) {
+    return m == DesignMethod::Delay || m == DesignMethod::ManualFIR || m == DesignMethod::ManualIIR;
+}
 
 double fir_a_pb_lin(double A) {
     const double g = std::pow(10.0, A / 20.0);
@@ -53,6 +65,17 @@ BType btype(RespType rt) {
 
 void check_freqs(const FilterSpec &s) {
     if (!(s.f_s > 0)) throw DesignError("The sampling frequency f_S must be > 0.");
+    if (is_manual(s.method)) return;
+    if (s.method == DesignMethod::MovingAverage) {
+        if (s.ma_stages < 1) throw DesignError("The number of stages must be >= 1.");
+        if (s.fo == OrderMode::Manual || s.rt == RespType::BP || s.rt == RespType::BS) {
+            if (s.N < 1) throw DesignError("The number of delays must be >= 1.");
+            return;
+        }
+        if (!(s.f_sb > 0 && s.f_sb < s.f_s / 2)) throw DesignError("F_SB must be between 0 and f_S / 2.");
+        if (!(s.A_SB > 0)) throw DesignError("A_SB must be > 0.");
+        return;
+    }
     auto chk = [&](double f, const char *name) {
         if (!(f > 0 && f < s.f_s / 2))
             throw DesignError(std::string(name) + " must be between 0 and f_S / 2.");
@@ -258,13 +281,174 @@ FilterDesign design_fir(FilterSpec s) {
     return d;
 }
 
+
+// smallest odd integer >= x, as documented for pyfda.libs.special_functions.ceil_odd
+// (pyfda's implementation returns x + 2 for odd x, so the order would grow with every redesign)
+int ceil_odd(double x) {
+    const int c = int(std::ceil(x));
+    return c % 2 ? c : c + 1;
+}
+
+// pyfda filter_widgets/ma.py, calc_ma(); N is the number of delays per stage
+FilterDesign design_ma(FilterSpec s) {
+    const int stages = s.ma_stages;
+    int delays = s.N;
+    const bool min = s.fo == OrderMode::Min;
+    const double f_sb = s.f_sb / s.f_s, a_sb = sb_lin(s.A_SB);
+    if (min && s.rt == RespType::LP)
+        delays = int(std::ceil(1 / (std::pow(a_sb, 1.0 / stages) * std::sin(f_sb * M_PI))));
+    else if (min && s.rt == RespType::HP)
+        delays = int(std::ceil(1 / (std::pow(a_sb, 1.0 / stages) * std::sin((0.5 - f_sb) * M_PI))));
+    else if (s.rt == RespType::BP || s.rt == RespType::BS)
+        delays = ceil_odd(delays);  // enforce odd order
+    if (delays < 1) delays = 1;
+    if (long(delays) * stages > 5000)
+        throw DesignError("Filter order N = " + std::to_string(long(delays) * stages) + " is too high.");
+
+    int l_taps = delays + 1;
+    Vec b0(l_taps, 1.0), idx;
+    double norm = l_taps;
+    switch (s.rt) {
+    case RespType::LP:
+        for (int i = 1; i < l_taps; ++i) idx.push_back(i);
+        break;
+    case RespType::HP: {
+        for (int i = 0; i < l_taps; i += 2) b0[i] = -1;
+        const int del = l_taps % 2 == 0 ? int(std::nearbyint(l_taps / 2.0)) : l_taps / 2;
+        const double off = l_taps % 2 == 0 ? 0.0 : 0.5;
+        for (int i = 0; i < l_taps; ++i)
+            if (i != del) idx.push_back(i + off);
+        break;
+    }
+    case RespType::BP:
+    case RespType::BS: {
+        const bool bp = s.rt == RespType::BP;
+        for (int i = 1; i < l_taps; i += 2) b0[i] = 0;
+        if (bp)
+            for (int i = 0; i < l_taps; i += 4) b0[i] = -1;
+        norm = 0;
+        for (double v : b0) norm += bp ? std::fabs(v) : v;
+        l_taps += 1;
+        for (int i = 0; i < l_taps; ++i)
+            if (i != 0 && i != l_taps / 2) idx.push_back(bp ? i + l_taps / 4.0 : i);
+        break;
+    }
+    }
+    CVec z0;
+    for (double i : idx) z0.push_back(std::exp(cplx(0, -2.0 * M_PI * i / l_taps)));
+    Vec b{1.0};
+    FilterDesign d;
+    for (int st = 0; st < stages; ++st) b = polymul(b0, b);
+    // np.repeat orders the zeros element-wise, keep that order
+    CVec zr;
+    for (const cplx &z : z0)
+        for (int st = 0; st < stages; ++st) zr.push_back(z);
+    d.zpk.z = zr;
+    d.zpk.k = 1.0;
+    if (s.ma_norm) {
+        const double g = std::pow(norm, stages);
+        for (double &v : b) v /= g;
+        d.zpk.k = 1.0 / g;
+    }
+    d.zpk.p = CVec(d.zpk.z.size(), 0.0);
+    d.fir = true;
+    d.ba = {b, {1.0}};
+    // pyfda's twiddle factor zeros for BP / BS don't match its coefficients (b0 = {1, 0, -1, 0, ...}
+    // has a trailing zero for an odd number of delays), use the roots of b instead
+    if (s.rt == RespType::BP || s.rt == RespType::BS) d.zpk = tf2zpk(d.ba);
+    s.N = delays;
+    d.spec = s;
+    return d;
+}
+
+FilterDesign design_manual(FilterSpec s) {
+    FilterDesign d;
+    if (s.method == DesignMethod::Delay) {
+        if (s.N < 1) throw DesignError("The number of delays must be >= 1.");
+        if (s.N > 5000) throw DesignError("Number of delays N = " + std::to_string(s.N) + " is too high.");
+        Vec b(s.N + 1, 0.0);
+        b[s.N] = 1.0;
+        d.ba = {b, {1.0}};
+        d.zpk.z = {};
+        d.zpk.p = CVec(s.N, 0.0);
+        d.zpk.k = 1.0;
+        d.fir = true;
+    } else if (s.manual_from_zpk) {
+        // real coefficients need complex poles / zeros in conjugate pairs
+        auto check_conj = [](const CVec &v, const char *what) {
+            std::vector<bool> used(v.size(), false);
+            for (size_t i = 0; i < v.size(); ++i) {
+                if (used[i] || std::fabs(v[i].imag()) <= 1e-12 * std::max(1.0, std::abs(v[i]))) continue;
+                bool found = false;
+                for (size_t j = i + 1; j < v.size() && !found; ++j)
+                    if (!used[j] && std::abs(v[j] - std::conj(v[i])) <= 1e-9 * std::max(1.0, std::abs(v[i]))) {
+                        used[j] = found = true;
+                    }
+                if (!found)
+                    throw DesignError(std::string("Complex ") + what + " must come in conjugate pairs for real coefficients.");
+            }
+        };
+        check_conj(s.manual_zpk.z, "zeros");
+        check_conj(s.manual_zpk.p, "poles");
+        if (s.manual_zpk.z.empty() && s.manual_zpk.p.empty() && s.manual_zpk.k == 0.0)
+            throw DesignError("Enter at least one pole, zero or a gain k != 0.");
+        d.zpk = s.manual_zpk;
+        d.ba = zpk2tf(d.zpk);
+        d.fir = true;
+        for (const cplx &p : d.zpk.p)
+            if (std::abs(p) != 0.0) d.fir = false;
+        if (d.zpk.z.size() > d.zpk.p.size()) {  // make it causal: add poles at the origin
+            d.zpk.p.insert(d.zpk.p.end(), d.zpk.z.size() - d.zpk.p.size(), 0.0);
+            d.ba = zpk2tf(d.zpk);
+        }
+    } else {
+        Ba ba = s.manual_ba;
+        while (ba.b.size() > 1 && ba.b.back() == 0.0 && ba.a.size() <= ba.b.size() - 1) ba.b.pop_back();
+        while (ba.a.size() > 1 && ba.a.back() == 0.0) ba.a.pop_back();
+        if (ba.b.empty()) ba.b = {0.0};
+        if (ba.a.empty() || ba.a[0] == 0.0) throw DesignError("a[0] must not be zero.");
+        if (ba.a[0] != 1.0) {  // normalize to a[0] = 1
+            const double a0 = ba.a[0];
+            for (double &v : ba.b) v /= a0;
+            for (double &v : ba.a) v /= a0;
+        }
+        d.fir = ba.a.size() == 1;
+        d.ba = ba;
+        bool all_zero = true;
+        for (double v : ba.b) all_zero = all_zero && v == 0.0;
+        if (all_zero) {
+            d.zpk.k = 0.0;
+            d.zpk.p = CVec(ba.a.size() - 1, 0.0);
+        } else {
+            d.zpk = tf2zpk(ba);
+        }
+    }
+    if (d.ba.b.size() > 5001 || d.ba.a.size() > 101) throw DesignError("Too many coefficients.");
+    s.method = s.method == DesignMethod::Delay ? DesignMethod::Delay
+               : d.fir                           ? DesignMethod::ManualFIR
+                                                 : DesignMethod::ManualIIR;
+    s.N = int(std::max(d.ba.b.size(), d.ba.a.size())) - 1;
+    if (!d.fir) d.sos = zpk2sos(d.zpk);
+    d.spec = s;
+    return d;
+}
+
 }  // namespace
 
 FilterDesign design_filter(const FilterSpec &spec) {
     check_freqs(spec);
-    FilterDesign d = is_fir(spec.method) ? design_fir(spec) : design_iir(spec);
+    FilterDesign d = is_manual(spec.method)                        ? design_manual(spec)
+                     : spec.method == DesignMethod::MovingAverage ? design_ma(spec)
+                     : is_fir(spec.method)                        ? design_fir(spec)
+                                                                  : design_iir(spec);
     std::ostringstream ss;
-    ss << method_name(spec.method) << " " << resp_type_name(spec.rt) << ", N = " << d.spec.N;
+    if (is_manual(spec.method))
+        ss << method_name(d.spec.method) << (d.fir ? " FIR" : " IIR") << ", N = " << d.spec.N;
+    else if (spec.method == DesignMethod::MovingAverage)
+        ss << method_name(spec.method) << " " << resp_type_name(spec.rt) << ", M = " << d.spec.N
+           << " delays x " << d.spec.ma_stages << " stage" << (d.spec.ma_stages > 1 ? "s" : "");
+    else
+        ss << method_name(spec.method) << " " << resp_type_name(spec.rt) << ", N = " << d.spec.N;
     d.info = ss.str();
     return d;
 }

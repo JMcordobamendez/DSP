@@ -1,5 +1,6 @@
 #include "spec_panel.hpp"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
 #include <QGridLayout>
@@ -17,8 +18,9 @@ using namespace pyfda;
 
 namespace {
 const DesignMethod IIR_METHODS[] = {DesignMethod::Butter, DesignMethod::Cheby1, DesignMethod::Cheby2,
-                                    DesignMethod::Ellip, DesignMethod::Bessel};
-const DesignMethod FIR_METHODS[] = {DesignMethod::Equiripple, DesignMethod::Firwin};
+                                    DesignMethod::Ellip, DesignMethod::Bessel, DesignMethod::ManualIIR};
+const DesignMethod FIR_METHODS[] = {DesignMethod::Equiripple, DesignMethod::Firwin, DesignMethod::MovingAverage,
+                                    DesignMethod::Delay, DesignMethod::ManualFIR};
 }  // namespace
 
 SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
@@ -38,7 +40,7 @@ SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
     fSel->addRow(tr("Type:"), m_ft);
     fSel->addRow(tr("Method:"), m_method);
 
-    auto *wOrder = new QWidget(this);
+    auto *wOrder = m_wOrder = new QWidget(this);
     auto *hOrder = new QHBoxLayout(wOrder);
     hOrder->setContentsMargins(0, 0, 0, 0);
     m_min = new QRadioButton(tr("Minimum"), this);
@@ -56,6 +58,24 @@ SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
     hOrder->addWidget(m_N, 1);
     fSel->addRow(tr("Order:"), wOrder);
 
+    // moving average: stages and normalization (pyfda filter_widgets/ma.py)
+    m_lstages = new QLabel(tr("Stages:"), this);
+    auto *wMa = new QWidget(this);
+    auto *hMa = new QHBoxLayout(wMa);
+    hMa->setContentsMargins(0, 0, 0, 0);
+    m_stages = new QSpinBox(this);
+    m_stages->setRange(1, 100);
+    m_stages->setToolTip(tr("Number of cascaded moving average stages; N is the number of delays per stage"));
+    m_norm = new QCheckBox(tr("Normalize"), this);
+    m_norm->setChecked(true);
+    m_norm->setToolTip(tr("Normalize to |H(f)|max = 1"));
+    hMa->addWidget(m_stages, 1);
+    hMa->addWidget(m_norm);
+    fSel->addRow(m_lstages, wMa);
+    m_hint = new QLabel(this);
+    m_hint->setWordWrap(true);
+    fSel->addRow(m_hint);
+
     m_lwindow = new QLabel(tr("Window:"), this);
     m_window = new QComboBox(this);
     for (const auto &w : window_list()) m_window->addItem(w.name, int(w.type));
@@ -72,7 +92,7 @@ SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
     lay->addWidget(grpSel);
 
     // --- frequency specs ----------------------------------------------------
-    auto *grpF = new QGroupBox(tr("Frequencies"), this);
+    auto *grpF = m_grpF = new QGroupBox(tr("Frequencies"), this);
     auto *gF = new QGridLayout(grpF);
     m_unit = new QComboBox(this);
     m_unit->addItems({"f_S (norm.)", "Hz", "kHz", "MHz"});
@@ -95,7 +115,7 @@ SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
     lay->addWidget(grpF);
 
     // --- amplitude specs ----------------------------------------------------
-    auto *grpA = new QGroupBox(tr("Amplitudes"), this);
+    auto *grpA = m_grpA = new QGroupBox(tr("Amplitudes"), this);
     auto *gA = new QGridLayout(grpA);
     addRow(gA, 0, "A_PB / dB", m_apb, m_lapb, tr("Maximum pass band ripple in dB"));
     addRow(gA, 1, "A_SB / dB", m_asb, m_lasb, tr("Minimum stop band attenuation in dB"));
@@ -140,9 +160,14 @@ SpecPanel::SpecPanel(QWidget *parent) : QWidget(parent) {
             for (DesignMethod m : FIR_METHODS) m_method->addItem(method_name(m), int(m));
         m_method->setCurrentIndex(idx == 0 ? 3 : 0);
         m_method->blockSignals(false);
+        m_manual.manual_from_zpk = false;  // a manual design starts from the current filter
         updateVisibility();
     });
-    connect(m_method, &QComboBox::currentIndexChanged, this, &SpecPanel::updateVisibility);
+    connect(m_method, &QComboBox::currentIndexChanged, this, [this] {
+        updateVisibility();
+        const auto m = DesignMethod(m_method->currentData().toInt());
+        if (!m_quiet && (m == DesignMethod::ManualFIR || m == DesignMethod::ManualIIR)) emit manualSelected();
+    });
     connect(m_min, &QRadioButton::toggled, this, &SpecPanel::updateVisibility);
     connect(m_window, &QComboBox::currentIndexChanged, this, [this](int) {
         const auto &w = window_list()[m_window->currentIndex()];
@@ -282,9 +307,52 @@ void SpecPanel::updateVisibility() {
     const bool min = m_min->isChecked();
     const bool two = rt == RespType::BP || rt == RespType::BS;
     const bool fir = is_fir(m);
+    const bool ma = m == DesignMethod::MovingAverage;
+    const bool manual = is_manual(m);
+    // moving average band pass / band stop filters only have a manual order
+    const bool ma_man = ma && (two || !min);
     const bool equi_man = m == DesignMethod::Equiripple && !min;
-    const bool edges = min || equi_man;
-    m_N->setEnabled(!min);
+    const bool edges = (min || equi_man) && !ma;
+    m_min->setEnabled(!manual && !(ma && two));
+    if (ma && two && min) m_man->setChecked(true);
+    m_N->setEnabled(m == DesignMethod::Delay || (!manual && !min) || ma_man);
+    m_man->setVisible(!manual);
+    m_min->setVisible(!manual);
+    m_lstages->setVisible(ma);
+    m_stages->parentWidget()->setVisible(ma);
+    m_grpF->setVisible(!manual && !ma_man);
+    m_grpA->setVisible(!manual && !ma_man);
+    m_N->setToolTip(ma ? tr("Number of delays M per stage")
+                    : m == DesignMethod::Delay ? tr("Number of delays N")
+                                               : tr("Filter order N (number of taps - 1 for FIR filters)"));
+    m_hint->setVisible(manual || ma);
+    if (m == DesignMethod::Delay) m_hint->setText(tr("<i>N</i> delays, H(z) = z<sup>-N</sup>."));
+    else if (manual)
+        m_hint->setText(tr("Enter the coefficients or poles / zeros in the <b>Coeffs</b> tab "
+                           "(<i>Edit</i>) and press <i>Apply</i>. DESIGN FILTER keeps them."));
+    else if (ma)
+        m_hint->setText(min && !two ? tr("Minimum number of delays M for the stop band specs F_SB, A_SB.")
+                                    : tr("Order N = M delays per stage x stages."));
+    if (ma) {  // only the stop band edge and attenuation are used
+        for (auto *w : {static_cast<QWidget *>(m_fpb), static_cast<QWidget *>(m_lfpb),
+                        static_cast<QWidget *>(m_fsb), static_cast<QWidget *>(m_lfsb),
+                        static_cast<QWidget *>(m_fpb2), static_cast<QWidget *>(m_lfpb2),
+                        static_cast<QWidget *>(m_fsb2), static_cast<QWidget *>(m_lfsb2),
+                        static_cast<QWidget *>(m_fc), static_cast<QWidget *>(m_lfc),
+                        static_cast<QWidget *>(m_fc2), static_cast<QWidget *>(m_lfc2),
+                        static_cast<QWidget *>(m_apb), static_cast<QWidget *>(m_lapb),
+                        static_cast<QWidget *>(m_wpb), static_cast<QWidget *>(m_lwpb),
+                        static_cast<QWidget *>(m_wsb), static_cast<QWidget *>(m_lwsb),
+                        static_cast<QWidget *>(m_window), static_cast<QWidget *>(m_lwindow),
+                        static_cast<QWidget *>(m_winpar), static_cast<QWidget *>(m_lwinpar),
+                        static_cast<QWidget *>(m_alg), static_cast<QWidget *>(m_lalg)})
+            w->setVisible(false);
+        m_fsb->setVisible(true);
+        m_lfsb->setVisible(true);
+        m_asb->setVisible(true);
+        m_lasb->setVisible(true);
+        return;
+    }
     for (auto *w : {static_cast<QWidget *>(m_fpb), static_cast<QWidget *>(m_lfpb), static_cast<QWidget *>(m_fsb),
                     static_cast<QWidget *>(m_lfsb)})
         w->setVisible(edges);
@@ -340,6 +408,11 @@ FilterSpec SpecPanel::spec() const {
     if (m_winpar->isVisible() || window_list()[m_window->currentIndex()].par_name)
         s.win_par = parse(m_winpar, m_lwinpar->text());
     s.order_alg = RemezAlg(m_alg->currentIndex());
+    s.ma_stages = m_stages->value();
+    s.ma_norm = m_norm->isChecked();
+    s.manual_ba = m_manual.manual_ba;
+    s.manual_zpk = m_manual.manual_zpk;
+    s.manual_from_zpk = m_manual.manual_from_zpk;
     return s;
 }
 
@@ -352,6 +425,11 @@ void SpecPanel::updateFromDesign(const FilterSpec &s) {
         m_wsb->setText(fmt(s.W_SB));
     }
     if (s.method == DesignMethod::Firwin && s.window == WindowType::Kaiser) m_winpar->setText(fmt(s.win_par));
+    if (is_manual(s.method)) {
+        m_manual.manual_ba = s.manual_ba;
+        m_manual.manual_zpk = s.manual_zpk;
+        m_manual.manual_from_zpk = s.manual_from_zpk;
+    }
     storeFreqs();
 }
 
@@ -378,8 +456,10 @@ void SpecPanel::setSpec(const FilterSpec &s, const QString &unit) {
     m_freqs[m_cur_rt] = {s.f_pb / fs, s.f_pb2 / fs, s.f_sb / fs, s.f_sb2 / fs, s.f_c / fs, s.f_c2 / fs};
     loadFreqs();
 
+    m_quiet = true;
     m_ft->setCurrentIndex(is_fir(s.method) ? 1 : 0);  // refills the method combo
     m_method->setCurrentIndex(std::max(0, m_method->findData(int(s.method))));
+    m_quiet = false;
     (s.fo == OrderMode::Min ? m_min : m_man)->setChecked(true);
     m_N->setValue(s.N);
     m_window->setCurrentIndex(std::max(0, m_window->findData(int(s.window))));
@@ -389,8 +469,29 @@ void SpecPanel::setSpec(const FilterSpec &s, const QString &unit) {
     m_asb->setText(fmt(s.A_SB));
     m_wpb->setText(fmt(s.W_PB));
     m_wsb->setText(fmt(s.W_SB));
+    m_stages->setValue(s.ma_stages);
+    m_norm->setChecked(s.ma_norm);
+    m_manual.manual_ba = s.manual_ba;
+    m_manual.manual_zpk = s.manual_zpk;
+    m_manual.manual_from_zpk = s.manual_from_zpk;
     updateVisibility();
     emit unitsChanged();
+}
+
+void SpecPanel::setManual(const FilterSpec &manual, bool fir) {
+    m_manual.manual_ba = manual.manual_ba;
+    m_manual.manual_zpk = manual.manual_zpk;
+    m_manual.manual_from_zpk = manual.manual_from_zpk;
+    const auto m = fir ? DesignMethod::ManualFIR : DesignMethod::ManualIIR;
+    m_quiet = true;
+    if (m_ft->currentIndex() != (fir ? 1 : 0)) {
+        const FilterSpec keep = m_manual;
+        m_ft->setCurrentIndex(fir ? 1 : 0);  // refills the method combo
+        m_manual = keep;
+    }
+    m_method->setCurrentIndex(std::max(0, m_method->findData(int(m))));
+    m_quiet = false;
+    updateVisibility();
 }
 
 void SpecPanel::setStatus(const QString &text, bool error) {

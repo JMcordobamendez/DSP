@@ -716,6 +716,127 @@ r = call(f"fxauto sos {L(sos_iir)} qi=0,15,round,sat qcb=0,15,round,sat qca=0,14
          "qo=0,15,round,sat")
 check("fxauto sos", r["qcb"] == [1, 15] and r["qca"] == [1, 14] and r["qacc"] == [1 + 3, 30], str(r))
 
+# ---- moving average, delay and manual filters (pyfda filter_widgets/ma.py, delay.py, manual.py) ----
+def ceil_odd(x):
+    """ smallest odd integer >= x (as documented in pyfda, its round_odd(x + 1) gives x + 2 for odd x) """
+    c = int(np.ceil(x))
+    return c if c % 2 else c + 1
+
+
+def root_dist(a, b):
+    """ max. distance between two sets of roots (greedy matching) """
+    a, e = list(a), 0.
+    if len(a) != len(b):
+        return np.inf
+    for x in b:
+        i = int(np.argmin([abs(x - y) for y in a]))
+        e = max(e, abs(x - a.pop(i)))
+    return e
+
+
+def calc_ma_py(rt, delays, stages, norm_on, fo='man', f_sb=0.2, A_SB=40.):
+    """ copy of pyfda's MA.calc_ma() and its lp_min / hp_min / bp / bs order calculation """
+    a_sb = 10 ** (-A_SB / 20)
+    if rt == 'LP' and fo == 'min':
+        delays = int(np.ceil(1 / (a_sb ** (1 / stages) * np.sin(f_sb * np.pi))))
+    elif rt == 'HP' and fo == 'min':
+        delays = int(np.ceil(1 / (a_sb ** (1 / stages) * np.sin((0.5 - f_sb) * np.pi))))
+    elif rt in ('BP', 'BS'):
+        delays = ceil_odd(delays)
+    k = 1.
+    l_taps = delays + 1
+    norm = l_taps
+    idx = np.arange(1, l_taps)
+    b0 = np.ones(l_taps)
+    if rt == 'HP':
+        b0[::2] = -1.
+        idx = np.arange(l_taps)
+        if l_taps % 2 == 0:
+            idx = np.delete(idx, round(l_taps / 2.))
+        else:
+            idx = np.delete(idx, int(l_taps / 2.)) + 0.5
+    elif rt == 'BP':
+        b0[1::2] = 0
+        b0[::4] = -1
+        l_taps = l_taps + 1
+        idx = np.delete(np.arange(l_taps), [0, l_taps // 2]) + l_taps / 4
+        norm = np.sum(abs(b0))
+    elif rt == 'BS':
+        b0[1::2] = 0
+        l_taps = l_taps + 1
+        idx = np.delete(np.arange(l_taps), [0, l_taps // 2])
+        norm = np.sum(b0)
+    z0 = np.exp(-2.j * np.pi * idx / l_taps)
+    b = 1
+    for _ in range(stages):
+        b = np.convolve(b0, b)
+    z = np.repeat(z0, stages)
+    if norm_on:
+        b = b / (norm ** stages)
+        k = 1. / norm ** stages
+    return delays, b, z, k
+
+
+for rt in ('LP', 'HP', 'BP', 'BS'):
+    for delays in (1, 2, 3, 4, 7, 12, 13):
+        for stages in (1, 2, 3):
+            for nrm in (0, 1):
+                name = f"ma {rt} M={delays} stages={stages} norm={nrm}"
+                d_ref, b_ref, z_ref, k_ref = calc_ma_py(rt, delays, stages, nrm)
+                r = call(f"design rt={rt} method=ma fo=manual N={delays} stages={stages} norm={nrm} f_s=1")
+                check(name + " N", r['N'] == d_ref, str(r['N']))
+                close(name + " b", r['b'], b_ref, 1e-12)
+                check(name + " a", r['a'] == [1], str(r['a']))
+                if rt in ('LP', 'HP'):
+                    close(name + " z", cplx(r['z']), z_ref, 1e-12)
+                    close(name + " k", r['k'], k_ref, 1e-14)
+                # the zeros are the roots of b (pyfda's BP / BS zeros are not, the port uses the roots)
+                if stages == 1:
+                    check(name + " z vs roots", root_dist(cplx(r['z']), np.roots(b_ref)) < 1e-6)
+for rt in ('LP', 'HP'):
+    for f_sb, A_SB in ((0.05, 20), (0.1, 40), (0.3, 30), (0.2, 60)):
+        for stages in (1, 2, 4):
+            d_ref, b_ref, z_ref, k_ref = calc_ma_py(rt, 0, stages, 1, 'min', f_sb, A_SB)
+            r = call(f"design rt={rt} method=ma fo=min stages={stages} f_s=2 f_sb={2 * f_sb!r} A_SB={A_SB}")
+            check(f"ma min {rt} f_sb={f_sb} A_SB={A_SB} stages={stages}", r['N'] == d_ref and
+                  np.allclose(r['b'], b_ref, rtol=1e-12, atol=0), f"{r['N']} != {d_ref}")
+for N in (1, 5, 20):
+    r = call(f"design method=delay N={N} f_s=1")
+    check(f"delay N={N}", r['b'] == [0] * N + [1] and r['a'] == [1] and r['fir'] and len(r['p']) == N
+          and len(r['z']) == 0, str(r)[:200])
+# manual coefficients: normalized to a[0] = 1, FIR / IIR detected from a
+b_m, a_m = [2., -1., 0.5], [2., -0.5, 0.25]
+r = call(f"design method=manual b={L(b_m)} a={L(a_m)} f_s=1")
+close("manual iir b", r['b'], np.array(b_m) / 2, 1e-15)
+close("manual iir a", r['a'], np.array(a_m) / 2, 1e-15)
+check("manual iir method", r['method'] == 'manual_iir' and not r['fir'] and len(r['sos']) == 1, str(r))
+z_ref, p_ref, k_ref = sig.tf2zpk(b_m, a_m)
+check("manual iir z", root_dist(cplx(r['z']), z_ref) < 1e-12 and root_dist(cplx(r['p']), p_ref) < 1e-12)
+r = call(f"design method=manual b=1,2,3,2,1 a=1 f_s=1")
+check("manual fir", r['method'] == 'manual_fir' and r['fir'] and r['N'] == 4 and r['b'] == [1, 2, 3, 2, 1], str(r))
+# manual poles / zeros
+zm = [0.5 + 0.5j, 0.5 - 0.5j, -1]
+pm = [0.8 * np.exp(0.3j), 0.8 * np.exp(-0.3j)]
+r = call("design method=manual z=" + ",".join(f"{float(v.real)!r}:{float(v.imag)!r}" for v in zm) + " p=" +
+         ",".join(f"{float(v.real)!r}:{float(v.imag)!r}" for v in pm) + " k=0.5 f_s=1")
+b_ref, a_ref = sig.zpk2tf(zm, pm + [0], 0.5)  # one pole added at the origin to make it causal
+close("manual zpk b", r['b'], b_ref, 1e-12)
+close("manual zpk a", r['a'], a_ref, 1e-12)
+check("manual zpk iir", r['method'] == 'manual_iir' and len(r['p']) == 3, str(r)[:200])
+r = call("design method=manual z=0.5:0,-1:0 p=0:0,0:0 k=2 f_s=1")
+check("manual zpk fir", r['method'] == 'manual_fir' and np.allclose(r['b'], [2, 1, -1]), str(r)[:200])
+# JSON round trip of the new methods
+for spec in ("rt=BP method=ma fo=manual N=8 stages=2 norm=0", "method=delay N=7",
+             "method=manual b=1,-0.5,0.25 a=1,0.3", "method=manual z=0.5:0.5,0.5:-0.5 p=0.9:0 k=3"):
+    r = call(f"design {spec} f_s=1")
+    js = call(f"tojson f_S {spec} f_s=1")['json']
+    with open("_rt.json", "w", encoding="utf-8") as f:
+        f.write(js)
+    r2 = call("fromjson _rt.json")
+    check(f"json round trip {spec}", r2['b'] == r['b'] and r2['a'] == r['a'] and r2['method'] == r['method'],
+          f"{r2} != {r}"[:300])
+os.remove("_rt.json")
+
 proc.stdin.close()
 proc.wait()
 print(f"{n_pass} checks passed, {n_fail} failed")

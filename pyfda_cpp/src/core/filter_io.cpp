@@ -36,6 +36,10 @@ const char *method_key(DesignMethod m) {
     case DesignMethod::Bessel: return "bessel";
     case DesignMethod::Firwin: return "firwin";
     case DesignMethod::Equiripple: return "equiripple";
+    case DesignMethod::MovingAverage: return "ma";
+    case DesignMethod::Delay: return "delay";
+    case DesignMethod::ManualFIR: return "manual_fir";
+    case DesignMethod::ManualIIR: return "manual_iir";
     }
     return "";
 }
@@ -57,7 +61,9 @@ RespType resp_type_from_key(const std::string &k) {
 
 DesignMethod method_from_key(const std::string &k) {
     for (DesignMethod m : {DesignMethod::Butter, DesignMethod::Cheby1, DesignMethod::Cheby2, DesignMethod::Ellip,
-                           DesignMethod::Bessel, DesignMethod::Firwin, DesignMethod::Equiripple})
+                           DesignMethod::Bessel, DesignMethod::Firwin, DesignMethod::Equiripple,
+                           DesignMethod::MovingAverage, DesignMethod::Delay, DesignMethod::ManualFIR,
+                           DesignMethod::ManualIIR})
         if (k == method_key(m)) return m;
     throw DesignError("Unknown design method '" + k + "'");
 }
@@ -321,7 +327,8 @@ std::string filter_to_json(const FilterDesign &d, const std::string &unit, const
     o << "    \"W_PB\": " << num(s.W_PB) << ", \"W_SB\": " << num(s.W_SB) << ",\n";
     o << "    \"window\": " << quote(window_name(s.window)) << ", \"win_par\": " << num(s.win_par) << ",\n";
     o << "    \"order_alg\": " << quote(order_alg_key(s.order_alg)) << ",\n";
-    o << "    \"grid_density\": " << s.grid_density << "\n";
+    o << "    \"grid_density\": " << s.grid_density << ",\n";
+    o << "    \"ma_stages\": " << s.ma_stages << ", \"ma_norm\": " << (s.ma_norm ? "true" : "false") << "\n";
     o << "  },\n";
     if (fx) {
         auto q = [](const QFormat &f) {
@@ -333,6 +340,17 @@ std::string filter_to_json(const FilterDesign &d, const std::string &unit, const
           << (fx->acc_auto ? "true" : "false") << ",\n";
         o << "    \"QI\": " << q(fx->qi) << ",\n    \"QCB\": " << q(fx->qcb) << ",\n    \"QCA\": " << q(fx->qca)
           << ",\n    \"QACC\": " << q(fx->qacc) << ",\n    \"QO\": " << q(fx->qo) << "\n  },\n";
+    }
+    if (is_manual(s.method) && s.manual_from_zpk) {
+        // poles / zeros entered by hand are the reference, store them exactly
+        auto cv = [](const CVec &v) {
+            std::string r = "[";
+            for (size_t i = 0; i < v.size(); ++i)
+                r += (i ? ", " : "") + std::string("[") + num(v[i].real()) + ", " + num(v[i].imag()) + "]";
+            return r + "]";
+        };
+        o << "  \"zpk\": {\"z\": " << cv(s.manual_zpk.z) << ",\n          \"p\": " << cv(s.manual_zpk.p)
+          << ",\n          \"k\": " << num(s.manual_zpk.k) << "},\n";
     }
     o << "  \"b\": " << vec(d.ba.b) << ",\n";
     o << "  \"a\": " << vec(d.ba.a) << ",\n";
@@ -374,6 +392,11 @@ FilterFile filter_from_json(const std::string &text) {
             s.fo = o == "min" ? OrderMode::Min : OrderMode::Manual;
         } else if (k == "N") s.N = int(as_num(v, k));
         else if (k == "grid_density") s.grid_density = int(as_num(v, k));
+        else if (k == "ma_stages") s.ma_stages = int(as_num(v, k));
+        else if (k == "ma_norm") {
+            if (v.type != Json::Bool) throw DesignError("Invalid filter file: 'ma_norm' must be true or false");
+            s.ma_norm = v.boolean;
+        }
         else if (k == "unit") f.unit = as_str(v, k);
         else if (k == "window") s.window = window_from_name(as_str(v, k));
         else if (k == "order_alg") s.order_alg = order_alg_from_key(as_str(v, k));
@@ -382,7 +405,8 @@ FilterFile filter_from_json(const std::string &text) {
     if (f.unit != "f_S" && f.unit != "Hz" && f.unit != "kHz" && f.unit != "MHz")
         throw DesignError("Invalid filter file: unknown unit '" + f.unit + "'");
     if (!(s.f_s > 0)) throw DesignError("Invalid filter file: f_S must be > 0");
-    if (s.N < 1) throw DesignError("Invalid filter file: N must be >= 1");
+    if (s.N < (is_manual(s.method) ? 0 : 1)) throw DesignError("Invalid filter file: N must be >= 1");
+    if (s.ma_stages < 1 || s.ma_stages > 100) throw DesignError("Invalid filter file: ma_stages out of range");
     if (const Json *fx = root.get("fixpoint"); fx && fx->type == Json::Object) {
         f.has_fx = true;
         auto flag = [&](const char *k, bool &target) {
@@ -417,6 +441,34 @@ FilterFile filter_from_json(const std::string &text) {
             std::array<double, 6> sec;
             std::copy(r.begin(), r.end(), sec.begin());
             f.sos.push_back(sec);
+        }
+    }
+    if (s.method == DesignMethod::ManualFIR || s.method == DesignMethod::ManualIIR) {
+        if (const Json *zpk = root.get("zpk"); zpk && zpk->type == Json::Object) {
+            auto cv = [](const Json *j, const char *key) {
+                CVec out;
+                if (!j) return out;
+                if (j->type != Json::Array) throw DesignError(std::string("Invalid filter file: '") + key + "' must be an array");
+                for (const Json &e : j->array) {
+                    const Vec r = as_vec(e, key);
+                    if (r.size() != 2 || !std::isfinite(r[0]) || !std::isfinite(r[1]))
+                        throw DesignError(std::string("Invalid filter file: '") + key + "' needs [re, im] pairs");
+                    out.emplace_back(r[0], r[1]);
+                }
+                return out;
+            };
+            s.manual_zpk.z = cv(zpk->get("z"), "z");
+            s.manual_zpk.p = cv(zpk->get("p"), "p");
+            s.manual_zpk.k = zpk->get("k") ? as_num(*zpk->get("k"), "k") : 1.0;
+            s.manual_from_zpk = true;
+        } else {
+            if (f.ba.b.empty() || f.ba.a.empty()) throw DesignError("Invalid filter file: manual filter without coefficients");
+            for (double v : f.ba.b)
+                if (!std::isfinite(v)) throw DesignError("Invalid filter file: 'b' is not finite");
+            for (double v : f.ba.a)
+                if (!std::isfinite(v)) throw DesignError("Invalid filter file: 'a' is not finite");
+            s.manual_ba = f.ba;
+            s.manual_from_zpk = false;
         }
     }
     return f;

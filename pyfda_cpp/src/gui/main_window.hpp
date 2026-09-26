@@ -29,6 +29,9 @@ public:
     QTabWidget *tabs() const { return m_tabs; }
     TranView *tran() const { return m_tran; }
     FixpointView *fixpoint() const { return m_fix; }
+    CoeffsView *coeffs() const { return m_coeffs; }
+    /// Design a "Manual" filter from coefficients / poles and zeros entered by hand
+    bool designManual(const pyfda::FilterSpec &manual);
 
 private slots:
     void onLog(int level, const QString &text);

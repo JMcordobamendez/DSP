@@ -101,6 +101,12 @@ jobs:
           $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/lowpass_50Hz.json', '--fixpoint', '--tran-export', 'tran_fx.csv', '--export-hdl', 'lowpass.vhd' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "pyfda_cpp.exe failed with exit code $($p.ExitCode)" }
           if (-not (Select-String -Path lowpass.vhd -Pattern 'entity lowpass is' -Quiet)) { throw "VHDL was not written" }
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--manual-zpk', '0.5:0.5,0.5:-0.5/0.9/2', '--save-filter', 'manual.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "manual P/Z design failed with exit code $($p.ExitCode)" }
+          $m = Get-Content manual.json -Raw | ConvertFrom-Json
+          if ($m.spec.method -ne 'manual_iir' -or $m.zpk.k -ne 2) { throw "manual P/Z filter not saved correctly" }
+          $p = Start-Process -FilePath dist/pyfda_cpp/pyfda_cpp.exe -ArgumentList '--load-filter', 'pyfda_cpp/examples/ma_lowpass.json', '--save-filter', 'ma.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "moving average design failed with exit code $($p.ExitCode)" }
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

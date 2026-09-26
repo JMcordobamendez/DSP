@@ -12,12 +12,20 @@
 namespace pyfda {
 
 enum class RespType { LP, HP, BP, BS };
-enum class DesignMethod { Butter, Cheby1, Cheby2, Ellip, Bessel, Firwin, Equiripple };
+enum class DesignMethod {
+    Butter, Cheby1, Cheby2, Ellip, Bessel, Firwin, Equiripple,
+    MovingAverage,  // pyfda filter_widgets/ma.py
+    Delay,          // pyfda filter_widgets/delay.py (N delays)
+    ManualFIR,      // coefficients / poles and zeros entered by hand
+    ManualIIR
+};
 enum class OrderMode { Min, Manual };
 
 const char *resp_type_name(RespType rt);
 const char *method_name(DesignMethod m);
 bool is_fir(DesignMethod m);
+/// methods that need no frequency specs (Delay, Manual)
+bool is_manual(DesignMethod m);
 
 struct FilterSpec {
     RespType rt = RespType::LP;
@@ -37,6 +45,13 @@ struct FilterSpec {
     double win_par = 10.0;
     RemezAlg order_alg = RemezAlg::Ichige;
     int grid_density = 16;
+    // moving average: number of cascaded stages, normalize to |H|max = 1
+    int ma_stages = 1;
+    bool ma_norm = true;
+    // manual designs: coefficients or poles / zeros entered by hand
+    Ba manual_ba{{1.0}, {1.0}};
+    Zpk manual_zpk;
+    bool manual_from_zpk = false;  // true: manual_zpk is the reference, else manual_ba
 };
 
 struct FilterDesign {

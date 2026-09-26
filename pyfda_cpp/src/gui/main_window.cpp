@@ -105,6 +105,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(&Logger::instance(), &Logger::message, this, &MainWindow::onLog);
     connect(m_specs, &SpecPanel::designRequested, this, [this] { design(); });
     connect(m_specs, &SpecPanel::unitsChanged, this, &MainWindow::updateViews);
+    connect(m_coeffs, &CoeffsView::manualDesignRequested, this, &MainWindow::designManual);
+    connect(m_specs, &SpecPanel::manualSelected, this, [this] {
+        // like pyfda, a manual filter starts with the coefficients of the current design
+        if (!m_design) return;
+        FilterSpec m;
+        m.manual_ba = m_design->ba;
+        m.manual_from_zpk = false;
+        m_specs->setManual(m, m_design->fir);
+        design();
+    });
     resize(1280, 820);
     design();
 }
@@ -136,6 +146,20 @@ bool MainWindow::design() {
         Logger::error(e.what());
         return false;
     }
+}
+
+bool MainWindow::designManual(const FilterSpec &manual) {
+    FilterSpec s = manual;
+    s.method = DesignMethod::ManualIIR;  // FIR / IIR is decided from the coefficients
+    try {
+        const FilterDesign d = design_filter(s);
+        m_specs->setManual(manual, d.fir);
+    } catch (const std::exception &e) {
+        m_specs->setStatus(e.what(), true);
+        Logger::error(e.what());
+        return false;
+    }
+    return design();
 }
 
 bool MainWindow::openFilter(const QString &file_name) {

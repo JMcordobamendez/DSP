@@ -86,6 +86,25 @@ respuesta a distintos estímulos y filtrar datos medidos.
 Diferencia con pyfda: en los FIR, `N` es siempre el **orden** (número de coeficientes − 1).
 pyfda usa `N` como número de coeficientes en el método de ventana.
 
+## Fase 4: edición manual, Moving Average, Delay y Manual
+
+* **Moving Average** (port de `ma.py`): paso bajo, paso alto, paso banda y elimina banda
+  con varias etapas en cascada y normalización opcional; orden mínimo para paso bajo y
+  paso alto a partir de F_SB y A_SB. Los coeficientes y los ceros coinciden con el código
+  de pyfda (`calc_ma`). Dos diferencias: en paso banda y elimina banda los ceros se
+  calculan como raíces de b (los de pyfda no corresponden a sus coeficientes) y
+  `ceil_odd` devuelve el impar ≥ x como dice su documentación (el de pyfda suma 2 a los
+  impares y el orden crece en cada rediseño).
+* **Delay**: N retardos, H(z) = z<sup>-N</sup>.
+* **Manual** (FIR o IIR): en la pestaña **Coeffs**, *Edit* permite escribir b y a o los
+  ceros, polos y la ganancia k, añadir y borrar filas y *Apply* (Ctrl+Enter) diseña un
+  filtro *Manual* con ellos. El tipo FIR/IIR se decide por los coeficientes, a se
+  normaliza a a[0] = 1 y si hay más ceros que polos se añaden polos en el origen. Los
+  polos/ceros complejos deben ir en pares conjugados. Al elegir *Manual* en el menú se
+  parte de los coeficientes del filtro actual, como en pyfda.
+* Los filtros manuales se guardan en el JSON con sus coeficientes o, si se introdujeron
+  como polos/ceros, con `"zpk"` para no perder precisión.
+
 ## Verificación
 
 ```
@@ -116,7 +135,8 @@ pasa los tests contra scipy y sube `pyfda_cpp.exe` con las DLL de Qt como artefa
 Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
 `--save-filter f.json`, `--stim sine`, `--tran-export t.csv`, `--fixpoint`,
 `--export-hdl filtro.vhd|.coe`, `--data fichero`,
-`--filter`, `--export salida.csv`, `--screenshot carpeta`.
+`--filter`, `--export salida.csv`, `--manual-ba "1,2,1/1,-0.5"`,
+`--manual-zpk "0.5:0.5,0.5:-0.5/0.9/2"`, `--screenshot carpeta`.
 
 ## Pendiente para siguientes fases
 
@@ -124,8 +144,7 @@ Opciones de línea de comandos (para pruebas): `--load-filter f.json`,
   datos de fichero como estímulo y condiciones iniciales. Gráfica 3D.
 * Coma fija: formato de visualización entero (`qint`), otras estructuras (FIR transpuesta,
   IIR DF2), exportación Verilog y testbench VHDL.
-* Edición manual de coeficientes y de polos/ceros, métodos *Moving Average*, *Delay* y
-  *Manual*.
+* Edición de polos/ceros arrastrándolos en la gráfica P/Z.
 * Visor de ventanas FFT y el resto de ventanas de pyfda, más unidades (f_Ny, k),
   especificaciones de amplitud en V/W, pestaña de información, fichero de configuración
   y traducciones.

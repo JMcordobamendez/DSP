@@ -128,7 +128,8 @@ FilterSpec parse_spec(std::istringstream &in) {
             static const std::map<std::string, DesignMethod> m = {
                 {"butter", DesignMethod::Butter}, {"cheby1", DesignMethod::Cheby1}, {"cheby2", DesignMethod::Cheby2},
                 {"ellip", DesignMethod::Ellip}, {"bessel", DesignMethod::Bessel}, {"firwin", DesignMethod::Firwin},
-                {"equiripple", DesignMethod::Equiripple}};
+                {"equiripple", DesignMethod::Equiripple}, {"ma", DesignMethod::MovingAverage},
+                {"delay", DesignMethod::Delay}, {"manual", DesignMethod::ManualIIR}};
             s.method = m.at(v);
         } else if (k == "fo") s.fo = v == "min" ? OrderMode::Min : OrderMode::Manual;
         else if (k == "N") s.N = std::stoi(v);
@@ -145,6 +146,21 @@ FilterSpec parse_spec(std::istringstream &in) {
         else if (k == "W_SB") s.W_SB = std::stod(v);
         else if (k == "window") s.window = win_type(v);
         else if (k == "win_par") s.win_par = std::stod(v);
+        else if (k == "stages") s.ma_stages = std::stoi(v);
+        else if (k == "norm") s.ma_norm = v == "1";
+        else if (k == "b") s.manual_ba.b = list(v);
+        else if (k == "a") s.manual_ba.a = list(v);
+        else if (k == "z" || k == "p") {  // re:im,re:im,...
+            CVec c;
+            std::stringstream ss(v);
+            std::string tok;
+            while (std::getline(ss, tok, ',')) {
+                const auto col = tok.find(':');
+                c.emplace_back(std::stod(tok.substr(0, col)), col == std::string::npos ? 0.0 : std::stod(tok.substr(col + 1)));
+            }
+            (k == "z" ? s.manual_zpk.z : s.manual_zpk.p) = c;
+            s.manual_from_zpk = true;
+        } else if (k == "k") s.manual_zpk.k = std::stod(v);
         else if (k == "alg") s.order_alg = v == "kaiser" ? RemezAlg::Kaiser : v == "herrmann" ? RemezAlg::Herrmann : RemezAlg::Ichige;
         else throw DesignError("unknown key " + k);
     }
@@ -330,7 +346,10 @@ std::string run(const std::string &line) {
         const FilterDesign d = design_filter(parse_spec(in));
         return "{\"N\":" + std::to_string(d.spec.N) + ",\"f_c\":" + num(d.spec.f_c) + ",\"f_c2\":" + num(d.spec.f_c2) +
                ",\"W_PB\":" + num(d.spec.W_PB) + ",\"W_SB\":" + num(d.spec.W_SB) + ",\"win_par\":" + num(d.spec.win_par) +
-               ",\"b\":" + arr(d.ba.b) + ",\"a\":" + arr(d.ba.a) + ",\"sos\":" + sosarr(d.sos) + "}";
+               ",\"b\":" + arr(d.ba.b) + ",\"a\":" + arr(d.ba.a) + ",\"sos\":" + sosarr(d.sos) +
+               ",\"z\":" + carr(d.zpk.z) + ",\"p\":" + carr(d.zpk.p) + ",\"k\":" + num(d.zpk.k) +
+               ",\"fir\":" + (d.fir ? "true" : "false") + ",\"method\":" + str(method_key(d.spec.method)) +
+               ",\"info\":" + str(d.info) + "}";
     }
     if (cmd == "tojson") {
         std::string unit;
