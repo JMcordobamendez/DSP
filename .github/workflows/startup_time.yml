@@ -1,0 +1,63 @@
+# Start time of pyfda_cpp.exe compared with pyfdax.exe (the PyInstaller build of pyfda
+# from PR #4, artifact "pyfdax_win"), see pyfda_cpp/tests/startup_time.ps1.
+name: startup_time
+
+on:
+  push:
+    paths:
+      - '.github/workflows/startup_time.yml'
+      - 'pyfda_cpp/tests/startup_time.ps1'
+  workflow_dispatch:
+    inputs:
+      pyfdax_run_id:
+        description: 'Run of build_pyfda_exe with the artifact pyfdax_win'
+        required: false
+        default: '36190115709'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  startup-windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          arch: 'win64_msvc2019_64'
+          cache: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build pyfda_cpp
+        shell: pwsh
+        run: |
+          cmake -S pyfda_cpp -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target pyfda_cpp
+          New-Item -ItemType Directory -Force -Path dist/pyfda_cpp | Out-Null
+          Copy-Item build/pyfda_cpp.exe dist/pyfda_cpp/
+          windeployqt --release --translations es --no-system-d3d-compiler --no-opengl-sw dist/pyfda_cpp/pyfda_cpp.exe
+
+      - name: Download pyfdax.exe (PR #4)
+        uses: actions/download-artifact@v4
+        with:
+          name: pyfdax_win
+          path: dist/pyfdax
+          run-id: ${{ inputs.pyfdax_run_id || '36190115709' }}
+          github-token: ${{ github.token }}
+
+      - name: Measure the start time
+        shell: pwsh
+        run: pyfda_cpp/tests/startup_time.ps1 -Cpp dist/pyfda_cpp/pyfda_cpp.exe -Py dist/pyfdax/pyfdax.exe -Runs 10
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup_time
+          path: startup_time.csv
