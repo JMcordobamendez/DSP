@@ -26,6 +26,9 @@ class DSP:
         
     #It uses the FFT algorithm to transform discrete time domain data in discrete frequency domain
     def calculate(self,):
+        #Reset the spectra so calling calculate() again does not append to previous results
+        self.YFFT = []
+        self.YF_FFT = []
         YFFT2 = abs(np.fft.fft(self.data))/len(self.data)
         n = 0
         for i in list(YFFT2):
@@ -55,7 +58,7 @@ class DSP:
     
     #Once the numerical calculations have been done, they can be plotted to see the results
     def plot(self,):
-        t = list(np.linspace(0,1/self.F,self.n))
+        t = list(np.arange(self.n)/self.fs)
         fig, ax = plt.subplots(2)
         fig.suptitle('Frequencial Analysis of the Signal')
         ax[0].plot(t, self.data_l,'b', label = 'Original')
