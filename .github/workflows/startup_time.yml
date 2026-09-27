@@ -1,4 +1,4 @@
-# Start time of pyfda_cpp.exe compared with pyfdax.exe (the PyInstaller build of pyfda
+# Start time, memory and size on disk of pyfda_cpp.exe compared with pyfdax.exe (the PyInstaller build of pyfda
 # from PR #4, artifact "pyfdax_win"), see pyfda_cpp/tests/startup_time.ps1.
 name: startup_time
 
