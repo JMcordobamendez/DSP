@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.github.chipmuenk.pyfda</id>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>pyfda</name>
+  <summary>Python Filter Design Analysis Tool</summary>
+
+  <description>
+    <p>Features:</p>
+    <ul>
+		<li>Design methods: Equiripple, Firwin, Moving Average, Bessel, Butterworth, Elliptic, Chebyshev 1 and 2 (from scipy.signal and custom methods)</li>
+		<li>Second-Order Sections are used in the filter design when available for more robust filter design and analysis</li>
+		<li>Remember all specifications when changing filter design methods</li>
+		<li>Fine-tune manually the filter order and corner frequencies calculated by minimum order algorithms</li>
+		<li>Compare filter designs for a given set of specifications and different design methods</li>
+		<li>Filter coefficients and poles / zeroes can be displayed, edited and quantized in various formats</li>
+		<li>only widgets needed for the currently selected design method are visible</li>
+		<li>enhanced matplotlib NavigationToolbar (nicer icons, additional functions)</li>
+		<li>display help files (own / Python docstrings) as rich text</li>
+		<li>tooltips for all control and entry widgets</li>
+		<li>specify frequencies as absolute values or normalized to sampling or Nyquist frequency</li>
+		<li>specify ripple and attenuations in dB, as voltage or as power ratios</li>
+		<li>enter expressions like exp(-pi/4 * 1j) with the help of the library simpleeval (included in source files)</li>
+		<li>Magnitude response (lin / power / log) with optional display of specification bands, phase and an inset plot</li>
+		<li>Phase response (wrapped / unwrapped)</li>
+		<li>Group delay</li>
+		<li>Pole / Zero plot</li>
+		<li>Impulse response and step response (lin / log)</li>
+		<li>3D-Plots (|H(f)|, mesh, surface, contour) with optional pole / zero display</li>
+		<li>Filter design files not only contain the actual algorithm but also dictionaries specifying which parameters and standard widgets have to be displayed in the GUI.</li>
+		<li>Special widgets needed by design methods (e.g. for choosing the window type in Firwin) are included in the filter design file, not in the main program</li>
+		<li>Save and load filter designs in pickled and in numpy's NPZ-format</li>
+		<li>Export and import coefficients and poles/zeros as comma-separated values (CSV), in numpy's NPY- and NPZ-formats, in Excel (R) or in Matlab (R) workspace format</li>
+		<li>Export coefficients in FPGA vendor specific formats like Xilinx (R) COE-format</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.github.chipmuenk.pyfda.desktop</launchable>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The main view</caption>
+    <image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot.png</image>
+		<image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot_specs_yn.png</image>
+		<image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot_specs_3d_surface.png</image>
+		<image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot_ba_yn_fir.png</image>
+		<image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot_pz_3d_contour.png</image>
+		<image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot_coeffs_pz.png</image>
+		<image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot_info_pz_hf.png</image>
+		<image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot_pz_yn_cmplx_stim.png</image>
+    <image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot_fix_yn_t.png</image>
+    <image>https://raw.githubusercontent.com/chipmuenk/pyfda/main/docs/source/screenshots/pyfda_screenshot_fix_yn_f.png</image>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/chipmuenk/pyfda</url>
+  <url type="bugtracker">https://github.com/chipmuenk/pyfda/issues</url>
+  <url type="help">https://github.com/chipmuenk/pyfda/issues</url>
+
+
+  <provides>
+    <binary>pyfdax</binary>
+    <id>com.github.chipmuenk.pyfda</id>
+  </provides>
+
+  <releases>
+    <release version="0.8.2" date="2023-09-08">
+      <description>
+        <p>Bugfixes and improvements mainly related to the UI</p>
+      </description>
+    </release>
+  <release version="0.8.1" date="2023-09-08">
+      <description>
+        <p>Bugfixes and improvements mainly related to the UI</p>
+      </description>
+    </release>
+    <release version="0.8.0" date="2023-08-09">
+      <description>
+        <p>Stimuli for transient simulations can be imported and exported as CSV and WAV files </p>
+        <p>Fix lot of UI bugs and crashes related to file imports</p>
+      </description>
+    </release>
+  <release version="0.7.1" date="2022-10-05">
+      <description>
+        <p>This release mainly fixes crashes with matplotlib 3.1 and scipy 1.8.0</p>
+      </description>
+    </release>
+    <release version="0.7.0" date="2022-10-04">
+      <description>
+        <p>Fixpoint filters</p>
+        <ul>
+          <li>This release has mainly addressed fixpoint simulation, introducing an IIR DF1 filter.</li>
+          <li>In the y[n] tab, you can now load CSV and WAV files as stimuli.</li>
+          <li>Export of CMSIS DSP coefficients in SOS format is now possible, somewhat hidden in the CSV export options.</li>
+          <li>Lots of bugfixes.</li>
+          <li>Usage of Github actions will ease future releases for hopefully shorter release cycles.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.6.1" date="2022-03-27">
+      <description>
+        <p>This release mainly fixes crashes with matplotlib 3.1 and scipy 1.8.0</p>
+      </description>
+    </release>
+	<release version="0.6.0" date="2021-12-24">
+      <description>
+        <p>This release deals mainly with the "y[n]" tab for simulating impulse and transient response and a better integration of the FFT pop-up widget. The internals of fixpoint and floating point simulations have been rewritten as a frame-based simulation.
+		</p>
+      </description>
+    </release>
+  </releases>
+
+ <content_rating type="oars-1.1">
+    <content_attribute id="violence-cartoon">none</content_attribute>
+    <content_attribute id="violence-fantasy">none</content_attribute>
+    <content_attribute id="violence-realistic">none</content_attribute>
+    <content_attribute id="violence-bloodshed">none</content_attribute>
+    <content_attribute id="violence-sexual">none</content_attribute>
+    <content_attribute id="violence-desecration">none</content_attribute>
+    <content_attribute id="violence-slavery">none</content_attribute>
+    <content_attribute id="violence-worship">none</content_attribute>
+    <content_attribute id="drugs-alcohol">none</content_attribute>
+    <content_attribute id="drugs-narcotics">none</content_attribute>
+    <content_attribute id="drugs-tobacco">none</content_attribute>
+    <content_attribute id="sex-nudity">none</content_attribute>
+    <content_attribute id="sex-themes">none</content_attribute>
+    <content_attribute id="sex-homosexuality">none</content_attribute>
+    <content_attribute id="sex-prostitution">none</content_attribute>
+    <content_attribute id="sex-adultery">none</content_attribute>
+    <content_attribute id="sex-appearance">none</content_attribute>
+    <content_attribute id="language-profanity">none</content_attribute>
+    <content_attribute id="language-humor">none</content_attribute>
+    <content_attribute id="language-discrimination">none</content_attribute>
+    <content_attribute id="social-chat">none</content_attribute>
+    <content_attribute id="social-info">none</content_attribute>
+    <content_attribute id="social-audio">none</content_attribute>
+    <content_attribute id="social-location">none</content_attribute>
+    <content_attribute id="social-contacts">none</content_attribute>
+    <content_attribute id="money-purchasing">none</content_attribute>
+    <content_attribute id="money-gambling">none</content_attribute>
+  </content_rating>
+  
+</component>
+
