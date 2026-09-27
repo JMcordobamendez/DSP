@@ -1,0 +1,231 @@
+# -*- coding: utf-8 -*-
+#
+# This file is part of the pyfda project hosted at https://github.com/chipmuenk/pyfda
+#
+# Copyright © pyfda Project Contributors
+# Licensed under the terms of the MIT License
+# (see file LICENSE in root directory for details)
+
+"""
+Dummy / template file for manual filter designs by entering P/Z or b/a.
+Targets for LP, HP, BP, BS are provided.
+Returns nothing.
+
+Attention:
+This class is re-instantiated dynamically everytime the filter design method
+is selected, calling the __init__ method.
+
+API version info:
+    :1.0: initial working release
+
+    :1.1: mark private methods as private
+
+    :1.2: new API using fil_save
+
+    :1.3: new public methods destruct_ui + construct_ui (no longer called by __init__)
+
+    :1.4: module attribute `filter_classes` contains class name and combo box name
+         instead of class attribute `name`
+
+    :2.0: Specify the parameters for each subwidget as tuples in a dict where the
+         first element controls whether the widget is visible and / or enabled.
+         This dict is now called self.rt_dict. When present, the dict self.rt_dict_add
+         is read and merged with the first one.
+
+    :2.1: Remove empty methods construct_ui and destruct_ui and attributes
+         self.wdg and self.hdl
+
+    :2.2: Rename `filter_classes` -> `classes`, remove Py2 compatibility
+"""
+
+__version__ = "2.2"
+
+ #: Dict containing class name : display name
+classes = {'ManualFIR':'Manual', 'ManualIIR':'Manual'}
+
+FRMT = 'ba' # default output format of filter design routines 'zpk' / 'ba' / 'sos'
+HAS_UI = False #: Flag whether the filter class has a UI or not
+
+msg_man = ('a', "Design the filter using the P/Z or the b/a widget. "
+                "The target specs are only used for entering and displaying spec limits.")
+
+INFO_STR =\
+"""
+**Manual Filter Design**
+
+Manual filter design mode is selected automatically when entering / editing
+poles and zeros ("P/Z" tab) or coefficients ("b,a" tab). Use the info tab
+or the magnitude frequency response (select "Show Specs") to check whether
+the designed filter fulfills the target specs.
+"""
+
+class ManualFIR():
+    """
+    Dummy filter design class, used / displayed when coefficients or P/Z have
+    been entered manually.
+    """
+
+    def __init__(self):
+
+        # This part contains static information for building the filter tree
+
+        self.ft = 'FIR'
+
+        self.rt_dict = {
+            'com':{'man':{'fo': ('d', 'N'),
+                          'msg': msg_man}
+                        },
+            'lp': {'man':{'tspecs': ('u', {'frq':('u','f_pb','f_sb'),
+                                           'amp':('u','a_pb','a_sb')})
+                         }},
+            'hp': {'man':{'tspecs': ('u', {'frq':('u','f_sb','f_pb'),
+                                           'amp':('u','a_sb','a_pb')})
+                        }},
+            'bs': {'man':{'tspecs': ('u', {'frq':('u','f_pb','f_sb','f_sb2', 'f_pb2'),
+                                           'amp':('u','a_pb','a_sb','a_pb2')})
+                        }},
+            'bp': {'man':{'tspecs': ('u', {'frq':('u','f_sb','f_pb','f_pb2','f_sb2',),
+                                           'amp':('u','a_sb','a_pb','a_sb2')})
+                        }},
+            'hil': {'man':{'tspecs': ('u', {'frq':('u','f_sb','f_pb','f_pb2','f_sb2',),
+                                           'amp':('u','a_sb','a_pb','a_sb2')})
+                        }},
+            'diff': {'man':{'tspecs': ('u', {'frq':('u','f_sb','f_pb','f_pb2','f_sb2',),
+                                           'amp':('u','a_sb','a_pb','a_sb2')})
+                        }}
+                   }
+
+        self.info = INFO_STR
+        self.info_doc = []
+        self.info_doc.append('manual FIR\n==========')
+
+    #------------------- end of static info for filter tree -------------------
+
+    # def _get_params(self, fil_dict):
+    #     """
+    #     Translate parameters from the filter dictionary to instance
+    #     parameters, scaling / transforming them if needed.
+    #     """
+    #     self.N     = fb_get('N')
+    #     self.f_pb  = fb_get('f_pb')
+    #     self.f_sb  = fb_get('f_sb')
+    #     self.f_pb2 = fb_get('f_pb2')
+    #     self.f_sb2 = fb_get('f_sb2')
+    #     self.f_c   = fb_get('f_c')
+    #     self.f_c2  = fb_get('f_c2')
+
+    #     self.a_pb  = fb_get('a_pb')
+    #     self.a_pb2 = fb_get('a_pb2')
+    #     self.a_sb  = fb_get('a_sb')
+    #     self.a_sb2 = fb_get('a_sb2')
+
+    def lp_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def hp_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def bp_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def bs_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def hil_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def diff_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+#############################################################################
+class ManualIIR():
+    """
+    Dummy filter design class, used / displayed when coefficients or P/Z have
+    been entered manually.
+    """
+    def __init__(self):
+
+        # This part contains static information for building the filter tree
+
+        self.ft = 'IIR'
+
+        self.rt_dict = {
+            'com':{'man':{'fo': ('d', 'N'),
+                          'msg': msg_man}
+                        },
+            'lp': {'man':{'tspecs': ('u', {'frq':('u','f_pb','f_sb'),
+                                           'amp':('u','a_pb','a_sb')})
+                         }},
+            'hp': {'man':{'tspecs': ('u', {'frq':('u','f_sb','f_pb'),
+                                           'amp':('u','a_sb','a_pb')})
+                        }},
+            'bs': {'man':{'tspecs': ('u', {'frq':('u','f_pb','f_sb','f_sb2', 'f_pb2'),
+                                           'amp':('u','a_pb','a_sb','a_pb2')})
+                        }},
+            'bp': {'man':{'tspecs': ('u', {'frq':('u','f_sb','f_pb','f_pb2','f_sb2',),
+                                           'amp':('u','a_sb','a_pb','a_sb2')})
+                        }},
+            'hil': {'man':{'tspecs': ('u', {'frq':('u','f_sb','f_pb','f_pb2','f_sb2',),
+                                           'amp':('u','a_sb','a_pb','a_sb2')})
+                        }},
+            'diff': {'man':{'tspecs': ('u', {'frq':('u','f_sb','f_pb','f_pb2','f_sb2',),
+                                           'amp':('u','a_sb','a_pb','a_sb2')})
+                        }}
+                   }
+
+        self.info = INFO_STR
+        self.info_doc = []
+        self.info_doc.append('manual IIR\n==========')
+
+        #------------------- end of static info for filter tree ---------------
+
+    # def _get_params(self):
+    #     """
+    #     Translate parameters from the passed dictionary to instance
+    #     parameters, scaling / transforming them if needed.
+    #     """
+    #     self.N     = fb_get('N')
+    #     self.f_pb  = fb_get('f_pb')
+    #     self.f_sb  = fb_get('f_sb')
+    #     self.f_pb2 = fb_get('f_pb2')
+    #     self.f_sb2 = fb_get('f_sb2')
+    #     self.f_c   = fb_get('f_c')
+    #     self.f_c2  = fb_get('f_c2')
+
+    #     self.a_pb  = fb_get('a_pb')
+    #     self.a_pb2 = fb_get('a_pb2')
+    #     self.a_sb  = fb_get('a_sb')
+    #     self.a_sb2 = fb_get('a_sb2')
+
+
+    def lp_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def hp_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def bp_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def bs_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def hil_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+    def diff_man(self):
+        """ Dummy method, to display widgets corresponding to filter type in UI """
+
+
+#------------------------------------------------------------------------------
+if __name__ == '__main__':
+    # Run module standalone using "python -m pyfda.filter_widgets.manual"
+    from pyfda.filterbroker import fb_get
+
+    filt = ManualIIR()    # instantiate filter
+    filt.lp_man()  # design a low-pass with parameters from global dict
+    print(fb_get(FRMT)) # return results in default format
+
+    filt = ManualFIR()    # instantiate filter
+    filt.lp_man()  # design a low-pass with parameters from global dict
+    print(fb_get(FRMT)) # return results in default format

@@ -1,0 +1,797 @@
+# -*- coding: utf-8 -*-
+#
+# This file is part of the pyfda project hosted at https://github.com/chipmuenk/pyfda
+#
+# Copyright © pyfda Project Contributors
+# Licensed under the terms of the MIT License
+# (see file LICENSE in root directory for details)
+
+"""
+Widget stacking all subwidgets for filter specification and design. The actual
+filter design is started here as well.
+"""
+import io
+import json
+import logging
+import os
+import pickle
+import sys
+
+import numpy as np
+
+from pyfda.filter_storage import fil_ref
+import pyfda.filterbroker as fb
+from pyfda.filterbroker import(
+    fb_get, fb_set, sanitize_fil_keys, sanitize_fil_values, dict2fil, fil_info, fil_copy)
+from pyfda.filter_factory import call_fil_method
+from pyfda.filter_tree_builder import FilterTreeBuilder as FTB
+from pyfda.input_widgets import (
+    select_filter, amplitude_specs, freq_specs, freq_units, weight_specs, target_specs)
+from pyfda.libs.compat import (
+    Qt, QWidget, QLabel, QFrame, QPushButton, QComboBox, QLineEdit, pyqtSignal,
+    QVBoxLayout, QHBoxLayout, QSizePolicy)
+
+import pyfda.libs.pyfda_dirs as dirs
+from pyfda.libs.json_numpy_encoder import JSONNumpyEncoder
+from pyfda.libs.pyfda_text_lib import to_html, first_item
+from pyfda.libs.pyfda_qt_lib import (
+    popup_warning, qstyle_widget, qcmb_box_populate, qget_cmb_box, emit)
+from pyfda.libs.pyfda_io_lib import select_file
+from pyfda.pyfda_rc import params
+
+logger = logging.getLogger(__name__)
+
+# --------------------------------------------------------------------------------------
+classes = {'InputSpecs': 'Specs'}  #: Dict containing class name : display name
+# This is read by `tree_builder._build_widget_class_dicts()` into the dict
+#  `filterbroker.INPUT_CLASSES_DICT` and used to create the widgets in input_tab_widgets.
+
+class InputSpecs(QWidget):
+    """
+    Build widget for entering all filter specs
+    """
+    # class variables (shared between instances if more than one exists)
+    sig_rx_local = pyqtSignal(object)  # incoming from subwidgets -> process_sig_rx_local
+
+    sig_rx = pyqtSignal(object)  # incoming from subwidgets -> process_sig_rx
+    sig_tx = pyqtSignal(object)  # from process_sig_rx: propagate local signals
+
+    def __init__(self, objectName: str = "input_specs_inst"):
+        super().__init__()
+        self.setObjectName(objectName)
+        self.tab_label = "Specs"
+        self.tool_tip = "Enter and view filter specifications."
+
+        self.led_info_tool_tip = "Filter info:"
+
+        filter_load_help_txt = "Load <- Mem {0}: " + fb_get('info')
+        self.cmb_filter_load_items = [
+            "<span>Load current filter(s) from memory location or file.</span>",
+            ("0", "LOAD", "Current filter, no action."),
+            ("1", "Mem 1", filter_load_help_txt.format("1")),
+            ("2", "Mem 2", filter_load_help_txt.format("2")),
+            ("3", "Mem 3", filter_load_help_txt.format("3")),
+            ("4", "Mem 4", filter_load_help_txt.format("4")),
+            ("5", "Mem 5", filter_load_help_txt.format("5")),
+            ("6", "Mem 6", filter_load_help_txt.format("6")),
+            ("7", "Mem 7", filter_load_help_txt.format("7")),
+            ("8", "Mem 8", filter_load_help_txt.format("8")),
+            ("9", "Mem 9", filter_load_help_txt.format("9")),
+            ("def", "Default", "Load default filter."),
+            ("def_all", "Default (all)", "Copy default filter to all memory locations."),
+            ("file", "File", "Load filter from file."),
+            ("file_all", "File (all)", "Load all filters from file.")
+        ]
+        self.cmb_filter_load_default = "0"
+
+        filter_save_help_txt = "Copy -> Mem {0}: " + fb_get('info')
+        self.cmb_filter_save_items = [
+            "<span>Copy / save current filter(s) to memory location or file.</span>",
+            ("0", "SAVE", "Current filter, no action."),
+            ("1", "Mem 1", filter_save_help_txt.format("1")),
+            ("2", "Mem 2", filter_save_help_txt.format("2")),
+            ("3", "Mem 3", filter_save_help_txt.format("3")),
+            ("4", "Mem 4", filter_save_help_txt.format("4")),
+            ("5", "Mem 5", filter_save_help_txt.format("5")),
+            ("6", "Mem 6", filter_save_help_txt.format("6")),
+            ("7", "Mem 7", filter_save_help_txt.format("7")),
+            ("8", "Mem 8", filter_save_help_txt.format("8")),
+            ("9", "Mem 9", filter_save_help_txt.format("9")),
+            ("file", "File", "Save current filter to file."),
+            ("file_all", "File (all)", "Save all filters to file.")
+        ]
+        self.cmb_filter_save_default = "0"
+
+        self._construct_ui()
+        self._construct_layout()
+        self._update_ui()  # first time initialization
+        self.start_design_filt()  # design first filter using default values
+
+    # -------------------------------------------------------------------------
+    def emit(self, dict_sig: dict) -> None:
+        """
+        Access imported function `emit()` as instance method, passing `self`
+        with its attributes
+        """
+        emit(self, dict_sig)
+
+    # -------------------------------------------------------------------------
+    def process_sig_rx_local(self, dict_sig: dict | None = None) -> None:
+        """
+        Signals coming in from local subwidgets need to be propagated, so set
+        `propagate=True` and proceed with processing in `process_sig_rx`.
+        """
+        self.process_sig_rx(dict_sig, propagate=True)
+
+    # -------------------------------------------------------------------------
+    def process_sig_rx(self, dict_sig: dict, propagate: bool = False) -> None:
+        """
+        Process signals coming in via subwidgets and sig_rx
+
+        All signals terminate here unless the flag `propagate=True`.
+
+        The sender name of signals coming in from local subwidgets is changed to
+        its parent widget (`input_specs`) to prevent infinite loops.
+
+        """
+        if dict_sig['id'] == id(self):
+            logger.debug("Stopped infinite loop (propagate = %s)\n:\n\t%s",
+                         propagate, first_item(dict_sig))
+            return
+
+        if 'specs_changed' in dict_sig:
+            if dict_sig['specs_changed'] == 'f_sort':
+                # sort and update the frequency widgets
+                self.f_specs.sort_dict_freqs()
+                self.t_specs.f_specs.sort_dict_freqs()
+            self.color_design_button('changed')
+        elif 'filt_changed' in dict_sig:
+            # Changing the filter design requires updating UI because number or
+            # kind of input fields changes -> reload filter parameters and _update_ui
+            self._update_ui()
+            self.sel_fil.dict2ui()
+            # Update state of "DESIGN FILTER" button
+            # It is disabled for "ManualIIR" and "ManualFIR" filter classes
+            self.color_design_button('changed')
+        elif 'data_changed' in dict_sig and dict_sig['data_changed'] == 'filter_loaded':
+            # Update info string from filter dict & set button = "ok"
+            # This is only triggered from global signals
+            self._load_info_text()
+
+        if propagate:
+            # local signals are propagated with the class name and id of this widget,
+            # global signals terminate here
+            dict_sig.update({'class': self.__class__.__name__, 'id': id(self)})
+            self.emit(dict_sig)
+
+    # -------------------------------------------------------------------------
+    def _construct_ui(self) -> None:
+        """
+        Construct User Interface from all input subwidgets
+        """
+        self.cmb_filter_load = QComboBox(self)
+        qcmb_box_populate(self.cmb_filter_load, self.cmb_filter_load_items,
+                          self.cmb_filter_load_default)
+        self.cmb_filter_load.insertSeparator(1)
+        self.cmb_filter_load.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.cmb_filter_save = QComboBox(self)
+        qcmb_box_populate(self.cmb_filter_save, self.cmb_filter_save_items,
+                          self.cmb_filter_save_default)
+        self.cmb_filter_save.insertSeparator(1)
+        self.cmb_filter_save.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.lbl_info_1 = QLabel(to_html(">", frmt='b'))
+        self.lbl_info_2 = QLabel(to_html(">", frmt='b'))
+        self.led_info = QLineEdit(fb_get('info'))
+        self.led_info.setToolTip(self.led_info_tool_tip)
+        # self.led_info.home(True)  # move cursor to beginning of line
+
+        self.but_design_filt = QPushButton("DESIGN FILTER", self)
+        self.but_design_filt.setToolTip("Design filter with chosen specs")
+        self.but_quit = QPushButton("Quit", self)
+        self.but_quit.setToolTip("Exit pyfda tool")
+
+        # Subwidget for selecting filter with response type rt (LP, ...),
+        #    filter type ft (IIR, ...) and filter class fc (cheby1, ...)
+        self.sel_fil = select_filter.SelectFilter(objectName="select_filter_inst")
+
+        # Subwidget for selecting the frequency unit and range
+        self.f_units = freq_units.FreqUnits(objectName="freq_units_inst")
+
+        # Changing the frequency unit requires re-display of frequency specs
+        # but it does not influence the actual specs (no specsChanged )
+        # Activating the "Sort" button emits 'view_changed'?specs_changed'?, requiring
+        # sorting and storing the frequency entries
+
+        # Changing filter parameters / specs requires reloading of parameters
+        # in other hierarchy levels, e.g. in the plot tabs
+
+        # Subwidget for Frequency Specs
+        self.f_specs = freq_specs.FreqSpecs(objectName="freq_specs_corner")
+
+        # Subwidget for Amplitude Specs
+        self.a_specs = amplitude_specs.AmplitudeSpecs(objectName="amplitude_specs_general")
+
+        # Subwidget for Weight Specs
+        self.w_specs = weight_specs.WeightSpecs(objectName="weight_specs_inst")
+
+        # Subwidget for target specs (frequency and amplitude)
+        self.t_specs = target_specs.TargetSpecs(title="Target Specifications",
+                                                objectName="target_specs_inst")
+
+        # Subwidget for displaying infos on the design method
+        self.lbl_msg = QLabel(self)
+        self.lbl_msg.setWordWrap(True)
+
+        # ----------------------------------------------------------------------
+        # GLOBAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        # connect incoming signals to process_sig_rx and other widgets?!
+        self.sig_rx.connect(self.process_sig_rx)
+        # self.sig_rx.connect(self.f_units.sig_rx)
+        self.sig_rx_local.connect(self.process_sig_rx_local)
+
+        # connect outgoing signal to receive slots of various subwidgets
+        self.sig_tx.connect(self.sel_fil.sig_rx)
+        self.sig_tx.connect(self.f_specs.sig_rx)
+        self.sig_tx.connect(self.t_specs.sig_rx)
+        self.sig_tx.connect(self.w_specs.sig_rx)
+        self.sig_tx.connect(self.f_units.sig_rx)
+
+        self.sel_fil.sig_tx.connect(self.sig_rx_local)
+        self.f_specs.sig_tx.connect(self.sig_rx_local)
+        self.a_specs.sig_tx.connect(self.sig_rx_local)
+        self.t_specs.sig_tx.connect(self.sig_rx_local)
+        self.w_specs.sig_tx.connect(self.sig_rx_local)
+        self.f_units.sig_tx.connect(self.sig_rx_local)
+
+        # ----------------------------------------------------------------------
+        # LOCAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        self.cmb_filter_load.currentIndexChanged.connect(self._load_filter)
+        self.cmb_filter_save.currentIndexChanged.connect(self._save_filter)
+        self.led_info.editingFinished.connect(self._save_info2dict)
+        self.but_design_filt.clicked.connect(self.start_design_filt)
+        self.but_quit.clicked.connect(self.quit_program)  # emit 'close_event'
+        # ----------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------
+    def _construct_layout(self) -> None:
+        """
+        Create the layout for the widget.
+        """
+        # ----------------------------------------------------------------------
+        # LAYOUT for loading and saving filters
+        # ----------------------------------------------------------------------
+        lay_h_buttons_load_save = QHBoxLayout()
+        lay_h_buttons_load_save.addWidget(self.cmb_filter_load) # Load from mem or file
+        lay_h_buttons_load_save.addWidget(self.lbl_info_1)
+        lay_h_buttons_load_save.addWidget(self.led_info)
+        lay_h_buttons_load_save.addWidget(self.lbl_info_2)
+        lay_h_buttons_load_save.addWidget(self.cmb_filter_save)  # <Save Filter> combo
+        lay_h_buttons_load_save.setContentsMargins(*params['wdg_margins_spc'])
+        lay_v_buttons_load_save = QVBoxLayout()
+        lay_v_buttons_load_save.addLayout(lay_h_buttons_load_save)
+        self.frm_buttons_load_save = QFrame()
+        self.frm_buttons_load_save.setLayout(lay_v_buttons_load_save)
+        self.frm_buttons_load_save.setContentsMargins(*params['wdg_margins'])
+
+        # ----------------------------------------------------------------------
+        # LAYOUT for Design and Quit buttons
+        # ----------------------------------------------------------------------
+        lay_h_buttons_action = QHBoxLayout()
+        lay_h_buttons_action.addWidget(self.but_design_filt)  # <Design Filter> button
+        lay_h_buttons_action.addWidget(self.but_quit)        # <Quit> button
+        lay_h_buttons_action.setContentsMargins(*params['wdg_margins'])
+
+        lay_v_msg = QVBoxLayout()
+        lay_v_msg.addWidget(self.lbl_msg)
+
+        self.frm_msg = QFrame(self)
+        self.frm_msg.setLayout(lay_v_msg)
+        lay_v_frm = QVBoxLayout()
+        lay_v_frm.addWidget(self.frm_msg)
+        lay_v_frm.setContentsMargins(*params['wdg_margins'])
+
+       # ----------------------------------------------------------------------
+        # Main LAYOUT
+        # ----------------------------------------------------------------------
+        lay_v_main = QVBoxLayout(self)
+        lay_v_main.addWidget(self.frm_buttons_load_save)  # <Load> & <Save> buttons
+        lay_v_main.addWidget(self.sel_fil)  # Design method (IIR - ellip, ...)
+        lay_v_main.addLayout(lay_h_buttons_action)  # <Design> & <Quit> buttons
+        lay_v_main.addWidget(self.f_units)  # Frequency units
+        lay_v_main.addWidget(self.t_specs)  # Target specs
+        lay_v_main.addWidget(self.f_specs)  # Freq. specifications
+        lay_v_main.addWidget(self.a_specs)  # Amplitude specs
+        lay_v_main.addWidget(self.w_specs)  # Weight specs
+        lay_v_main.addLayout(lay_v_frm)       # Text message
+        lay_v_main.addStretch()
+        lay_v_main.setContentsMargins(*params['wdg_margins'])
+
+        self.setLayout(lay_v_main)  # main layout of widget
+        # Required to prevent shrinking of subwidgets
+        self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
+
+    # --------------------------------------------------------------------------
+    def _save_info2dict(self) -> None:
+        """
+        Update_filter dict and tooltip every time the info field is changed
+        """
+        fb_set('info', self.led_info.text())
+        self.led_info.setToolTip("<span>" + self.led_info_tool_tip + "\n"
+                                 + self.led_info.text() + "</span>")
+        self.led_info.home(True)  # move cursor to beginning
+        self.led_info.deselect()
+
+    # --------------------------------------------------------------------------
+    def _update_ui(self) -> None:
+        """
+        _update_ui is called every time the filter design method or order
+        (min / man) has been changed as this usually requires a different set of
+        frequency and amplitude specs.
+
+        At this time, the actual filter object instance has been created from
+        the name of the design method (e.g. 'cheby1') in select_filter.py.
+        Its handle has been stored in `fb.fil_inst`.
+
+        The dict fil[0] with the current filter info is read, then general information
+        for the selected filter type and order (min/man) is gathered from
+        the filter tree [FTB.fil_tree], i.e. which parameters are needed, which
+        widgets are visible and which message shall be displayed.
+
+        Then, the UIs of all subwidgets are updated using their `update_ui()` methods.
+        """
+        rt = fb_get('rt')  # e.g. 'lp'
+        ft = fb_get('ft')  # e.g. 'FIR'
+        fc = fb_get('fc')  # e.g. 'equiripple'
+        fo = fb_get('fo')  # e.g. 'man'
+
+        # the keys of the all_widgets dict are the names of the subwidgets,
+        # the values are a tuple with the corresponding parameters
+        all_widgets = FTB.fil_tree[rt][ft][fc][fo]
+
+        # update filter order subwidget, called by select_filter:
+        # self.sel_fil.load_filter_order()
+
+        # TARGET SPECS: is widget in the dict and is it visible (marker != 'i')?
+        if ('tspecs' in all_widgets and len(all_widgets['tspecs']) > 1 and
+                all_widgets['tspecs'][0] != 'i'):
+            self.t_specs.setVisible(True)
+            # disable all subwidgets with marker 'd':
+            self.t_specs.setEnabled(all_widgets['tspecs'][0] != 'd')
+            self.t_specs.update_ui(new_labels=all_widgets['tspecs'][1])
+        else:
+            self.t_specs.hide()
+
+        # FREQUENCY SPECS
+        if ('fspecs' in all_widgets and len(all_widgets['fspecs']) > 1 and
+                all_widgets['fspecs'][0] != 'i'):
+            self.f_specs.setVisible(True)
+            self.f_specs.setEnabled(all_widgets['fspecs'][0] != 'd')
+            self.f_specs.update_ui(new_labels=all_widgets['fspecs'])
+        else:
+            self.f_specs.hide()
+
+        # AMPLITUDE SPECS
+        if ('aspecs' in all_widgets and len(all_widgets['aspecs']) > 1 and
+                all_widgets['aspecs'][0] != 'i'):
+            self.a_specs.setVisible(True)
+            self.a_specs.setEnabled(all_widgets['aspecs'][0] != 'd')
+            self.a_specs.update_ui(new_labels=all_widgets['aspecs'])
+        else:
+            self.a_specs.hide()
+
+        # WEIGHT SPECS
+        if ('wspecs' in all_widgets and len(all_widgets['wspecs']) > 1 and
+                all_widgets['wspecs'][0] != 'i'):
+            self.w_specs.setVisible(True)
+            self.w_specs.setEnabled(all_widgets['wspecs'][0] != 'd')
+            self.w_specs.update_ui(new_labels=all_widgets['wspecs'])
+        else:
+            self.w_specs.hide()
+
+        # MESSAGE PANE
+        if ('msg' in all_widgets and len(all_widgets['msg']) > 1 and
+                all_widgets['msg'][0] != 'i'):
+            self.frm_msg.setVisible(True)
+            self.frm_msg.setEnabled(all_widgets['msg'][0] != 'd')
+            self.lbl_msg.setText(all_widgets['msg'][1:][0])
+        else:
+            self.frm_msg.hide()
+
+        # Update state of "DESIGN FILTER" button
+        # It is disabled for "ManualIIR" and "ManualFIR" filter classes
+        self.color_design_button('changed')
+
+    # ================= FILTER LOADING AND SAVING ========================================
+    def _load_filter(self) -> None:
+        """
+        Load one or all filter dicts `fil` either from file or from memory and update the info text
+        via `_load_info_text()` and the widgets via sig_tx: {'data_changed':'filter_loaded'}.
+        """
+        src = qget_cmb_box(self.cmb_filter_load)
+        # 'File' or 'File (all)' selected, update fil[0] resp. fil[0] ... fil[9] from file
+        if src in {"file", "file_all"}:
+            ret = load_filter(self, all_filters=src == "file_all")
+            if not ret:
+                self.cmb_filter_load.setCurrentIndex(0)
+                return  # aborted or error occurred -> do nothing
+
+        elif src == "def":  # restore default filter
+            fb.fil_copy(src="ref", dest="0" )
+
+        elif src == "def_all":  # restore all filters to default values
+            fb.fil_copy(src="ref", dest="all" )
+
+        else:
+            # 'Mem <i>', copy fil[i] to fil[0]
+            fb.fil_copy(src=str(src), dest="0")
+            logger.warning("copy %s -> 0", src)
+
+        # update info string
+        self._load_info_text()
+        self.cmb_filter_load.setCurrentIndex(0)
+        self.emit({'data_changed': 'filter_loaded'})
+        self.color_design_button("ok")
+
+    # --------------------------------------------------------------------------
+    def _load_info_text(self) -> None:
+        """
+        Reload and update info text from global dict `fil[0]`, update tool tipps for load
+        and save combo box and reset 'DESIGN' button
+        """
+        self.led_info.setText(str(fil_info(0)))
+        for i in range(1,10):
+            self.cmb_filter_save.setItemData(
+                i + 1, f"Copy -> Mem {i}: {fil_info(i)}", Qt.ToolTipRole)
+            self.cmb_filter_load.setItemData(
+                i + 1, f"Load <- Mem {i}: {fil_info(i)}", Qt.ToolTipRole)
+
+    # --------------------------------------------------------------------------
+    def _save_filter(self) -> None:
+        """
+        Save current filter `fil[0]` either to file or to one of the memories or
+        save all filters `fil` to a file.
+        """
+        # `dest`` contains the data field of the combo box which is either "file" / "file_all"
+        # or the number of the memory location (e.g. "2" for "Mem 2"). This is larger by 1
+        # than the combobox index
+        dest = qget_cmb_box(self.cmb_filter_save)
+
+        if dest == "file":
+            # save current filter to file
+            save_filter(self, all_filters=False, title="Save Filter")
+        elif dest == "file_all":
+            # save all filters
+            save_filter(self, all_filters=True, title="Save All Filters")
+        elif dest == "0":
+            # filter 0 selected, don't do anything
+            return
+        else:
+            # save fil[0] to selected location
+            fil_copy(src="0", dest=dest)
+            logger.warning("copy 0 -> %s", dest)
+            # insert info string into new tool tip
+            self.cmb_filter_save.setItemData(
+                int(dest) + 1, f"Copy -> Mem {dest}: {self.led_info.text()}", Qt.ToolTipRole)
+            self.cmb_filter_load.setItemData(
+                int(dest) + 1, f"Load <- Mem {dest}: {self.led_info.text()}", Qt.ToolTipRole)
+        self.cmb_filter_save.setCurrentIndex(0)
+
+
+    # --------------------------------------------------------------------------
+    def start_design_filt(self) -> None:
+        """
+        Start the actual filter design process:
+
+        - store the entries of all input widgets in the global filter dict.
+        - call the design method, passing the whole dictionary as the
+          argument: let the design method pick the needed specs
+        - update the input widgets in case weights, corner frequencies etc.
+          have been changed by the filter design method
+        - the plots are updated via signal-slot connection
+        """
+
+        logger.info(
+            "Start filter design using method\n\t'%s.%s%s'",
+            fb_get('fc'), fb_get('rt'), fb_get('fo'))
+
+        # ----------------------------------------------------------------------
+        # A globally accessible instance of selected filter class fc
+        # has been instantiated in filter_factory.set_design_method, now
+        # call the method specified in the filter dict fil[0].
+
+        # The name of the instance method is constructed from the response
+        # type (e.g. 'lp') and the filter order (e.g. 'man'), giving e.g. 'LPman'.
+        # The filter is designed by passing the specs in fil[0] to the method,
+        # resulting in e.g. cheby1.LPman() and writing coefficients, P/Z etc. back to fil[0].
+
+        err = call_fil_method(fb_get('rt') + '_' +fb_get('fo'), fc=fb_get('fc'))
+        # this is the same as e.g.
+        # from pyfda.filter_design import ellip
+        # inst = ellip.ellip()
+        # inst.lp_min()
+        # -----------------------------------------------------------------------
+
+        if err > 0:
+            self.color_design_button("error")
+        elif err == -1:  # filter design cancelled by user
+            return
+        else:
+            # Update filter order in case it has been changed by the
+            # design algorithm and emit {'data_changed': 'filter_designed'}
+            self.sel_fil.load_filter_order()
+            self.color_design_button("ok")
+
+            self.emit({'data_changed': 'filter_designed'})
+            logger.info("Designed filter with order = %s", str(fb_get('N')))
+
+
+    def color_design_button(self, state: str) -> None:
+        """
+        Color the >> DESIGN FILTER << button according to the filter design state
+        using `qstyle_widget()` and the states defined in pyfda_rc.py, e.g.:
+        - "ok": filter designed and up to date with specs
+        - "changed": specs have been changed and filter needs to be re-designed
+        - "error": filter design failed with current specs
+        """
+        man = "manual" in fb_get('fc').lower()
+        self.but_design_filt.setDisabled(man)
+        if man:
+            state = 'ok'
+        qstyle_widget(self.but_design_filt, state)
+
+    # --------------------------------------------------------------------------
+    def quit_program(self) -> None:
+        """
+        When <QUIT> button is pressed, send 'close_event'
+        """
+        self.emit({'close_event': ''})
+
+# ==============================================================================
+def load_filter(self, all_filters: bool = False) -> bool:
+    """
+    Load filter from JSON, zipped binary numpy array or (c)pickled object to
+    filter dictionary
+
+    Parameters
+    ----------
+    all_filters: bool
+        If True, load all 10 memory locations, otherwise only the first one.
+
+    Returns
+    -------
+    True for success, False for file cancel or error
+    """
+    file_name, file_type = select_file(
+        self, title="Load Filter", mode="rb", file_types = ("json", "npz", "pkl"))
+
+    if file_name is None:
+        return False  # operation cancelled or some other error
+
+    if file_type in {"npz", "pkl"}:
+        try:
+            with io.open(file_name, 'rb') as f:  # open in binary mode for npy and pkl
+                if file_type == 'npz':
+                    fb_temp = {}
+                    # array containing dict, dtype 'object':
+                    arr = np.load(f, allow_pickle=True)
+                    if not isinstance(arr, np.lib.npyio.NpzFile):
+                        logger.error("Tried to load file with 'npz' format, but file type is %s.",
+                                       type(arr).__name__)
+                        raise IOError("Not a valid npz file!")
+
+                    # convert arrays to lists and extract scalar objects
+                    for key in sorted(arr):
+                        if np.ndim(arr[key]) == 0:
+                            # scalar objects may be extracted with the item() method
+                            fb_temp.update({key: arr[key].item()})
+                        else:
+                            # array objects are converted to list first
+                            fb_temp.update({key: arr[key].tolist()})
+                else:  # file_type == 'pkl':
+                    fb_temp = pickle.load(f)
+
+        except IOError as e:
+            logger.error("Failed opening %s!\n%s", file_name, e)
+            return False
+
+    elif file_type == 'json':
+        try:
+            with io.open(file_name, 'r', encoding='utf-8') as f:  # open in text mode (json files)
+                fb_temp = json.load(f)
+
+        except (IOError, json.JSONDecodeError) as e:
+            logger.error("JSON error: Failed loading / opening\n\t%s!\n%s", file_name, e)
+            f.close()
+            return False
+
+    else:
+        logger.error('Unknown file type "%s"', file_type)
+        return False
+
+    if isinstance(fb_temp, dict):
+        # encapsulate dict in list for unified processing
+        fb_temp = [fb_temp]
+
+    # --- Verify loaded file content for correct type and shape ------------------
+    ret = verify_file_shape(fb_temp, all_filters)
+    if ret == 1:
+        return False  # unsuitable type / shape
+    if ret == 2:
+        fb_temp = fb_temp[:1]  # only use the first filter of the list as requested by user
+    elif ret == 3:
+        all_filters = False  # filter contains only a dict although 'all filters' had
+                             # been selected. User decided to still load the single filter
+
+    # --- Test for correct id and version number ------------------------------
+    err = False
+    if '_id' not in fb_temp[0] or len(fb_temp[0]['_id']) != 2 or fb_temp[0]['_id'][0] != 'pyfda':
+        msg = "Missing id 'pyfda', this is no pyfda filter! Load anyway?"
+        err = not popup_warning(None, message=msg)
+
+    elif fb_temp[0]['_id'][1] != fil_ref['_id'][1]:
+        msg = (
+            f"The filter file has version {fb_temp[0]['_id'][1]} instead of "
+            f"required version {fil_ref['_id'][1]}! Load anyway?")
+        err = not popup_warning(None, message=msg)
+
+    if err: # answer was 'no'
+        return False
+
+    # check for missing or unsupported keys and issue warnings
+    fb_temp = sanitize_fil_keys(all_filters, fb_temp)
+    # sanitize some of the values of the loaded filter dict
+    fb_temp = sanitize_fil_values(fb_temp)
+    if not fb_temp: # values could not be sanitized, return with an error
+        return 1
+
+    # copy loaded filter(s) to `fil` dict
+    dict2fil(fb_temp)
+
+    logger.info('Successfully loaded filter\n\t"%s"', file_name)
+    dirs.last_file_name = file_name
+    dirs.last_file_dir = os.path.dirname(file_name)  # update default working dir
+    dirs.last_file_type = file_type  # save new default file type
+    return True
+
+# ------------------------------------------------------------------------------
+def save_filter(self, all_filters: bool, title: str = "Save Filter(s)") -> int:
+    """
+    Save current filter as JSON formatted textfile, zipped binary numpy array
+    or pickled object
+
+    Parameters
+    ----------
+    title : str, optional
+        Dialog window title. The default is "Save Filter(s)".
+
+    all_filters : bool
+        If True, save all filter memory locations, otherwise only the current
+        filter.
+
+    Returns
+    -------
+    int:
+        0 for success, 1 for file cancel or error
+    """
+
+    file_name, file_type = select_file(
+        self, title=title, mode='w', file_types = ("json", "npz", "pkl"))
+
+    if not file_name:
+        return 1  # operation cancelled or other error
+
+
+    err = False
+    # copy filter(s) to be saved and clean the keys
+    if all_filters:
+        fil_clean = sanitize_fil_keys()  # use list with all flobal filters
+    else:
+        fil_clean = sanitize_fil_keys(all_filters=False)  # list with first global filter
+
+    if file_type in {"npz", "pkl"}:
+        try:
+            with io.open(file_name, 'wb') as f:  # open in binary mode
+                if file_type == 'npz':
+                    np.savez(f, **fil_clean)
+                else:  # file_type == 'pkl':
+                    pickle.dump(fil_clean, f)  # save in default pickle version
+
+        except IOError as e:
+            err = True
+            logger.error('Failed saving "%s"!\n%s', file_name, e)
+
+    elif file_type == 'json':
+        try:
+            with io.open(file_name, 'w', encoding='utf-8') as f:  # open in text mode
+                # first, convert dict containing numpy arrays to a pure json string
+                fil_clean_json = json.dumps(fil_clean, cls=JSONNumpyEncoder, indent=2,
+                                        ensure_ascii=False, sort_keys=True )
+                # next, dump the string to a file
+                f.write(fil_clean_json)
+
+        except IOError as e:
+            err = True
+            logger.error('Failed saving "%s"!\n%s', file_name, e)
+    else:
+        err = True
+        logger.error('Unknown file type "%s"', file_type)
+
+    if not err:
+        logger.info('Filter saved as\n\t"%s"', file_name)
+        dirs.last_file_name = file_name
+        dirs.last_file_dir = os.path.dirname(file_name)  # save new default dir
+        dirs.last_file_type = file_type  # save new default file type
+        return 0
+    return 1
+
+# ------------------------------------------------------------------------------
+def verify_file_shape(fil_dict: list[dict], all_filters) -> int:
+    """
+    Verify that the content of a loaded file is either a list containing 10 dicts (10
+    filters) or a single dict (one filter).
+
+    Parameters
+    ----------
+    fil_dict: list[dict]
+        The filter or filters to be verified
+
+    all_filters: bool
+        When True, expect a list of 10 filters, when False, expect a single filter.
+
+    Returns
+    -------
+    int
+        0: Successful verification
+        1: Error, filter cannot be loaded
+        2: A list of filter dicts has been passed but a single filter has been requested
+            (`all_filters == False`). This needs to be fixed one hierarchy level up.
+            by extracting the first filter
+        3: A single dict has been passed but a list of filters has been requested
+            (`all_filters == True`). This needs to be fixed one hierarchy level up.
+
+    """
+    if not isinstance(fil_dict, list):
+        logger.error("Wrong data type '%s', cannot load file.", type(fil_dict))
+        return 1
+
+    if len(fil_dict) == 1:  # single filter design
+        if all_filters:
+            msg = ("This file contains only one filter! "
+                   "Load as current design (Yes) or abort (No)?")
+            if popup_warning(None, message=msg):  # 'yes' has been pressed
+                # process as single filter, set `all_filters = False` one level higher
+                return 3
+            logger.warning("Cancelling file operation.")
+            return 1
+        return 0  # all_filters == False, load list with single filter
+
+    if len(fil_dict) == 10:  # all 10 filter designs
+        if not all_filters:
+            msg = ("This file contains all 10 memory locations! "
+                "Load the first one as current design (Yes) or abort (No)?")
+            if popup_warning(None, message=msg):  # 'yes' has been pressed
+                # extract first filter one level higher
+                return 2
+            logger.warning("Cancelling file operation.")
+            return 1
+        return 0
+
+    logger.error(
+        "File contains a list with wrong length = %d != 1 or 10 "
+        "which cannot be loaded!", len(fil_dict))
+    return 1
+
+# ==========================================================================
+if __name__ == '__main__':
+    # Run widget standalone with `python -m pyfda.input_widgets.input_specs`
+    from pyfda.libs.compat import QApplication
+    from pyfda.pyfda_rc import QSS
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(QSS.QSS_RC)
+    mainw = InputSpecs()
+    app.setActiveWindow(mainw)
+    mainw.show()
+    sys.exit(app.exec_())

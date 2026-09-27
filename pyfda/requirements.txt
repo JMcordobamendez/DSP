@@ -1,0 +1,9 @@
+numpy >= 1.16.0
+scipy >= 1.2.0
+matplotlib >= 3.3
+pyqt5
+docutils
+mplcursors
+numexpr >= 2.8.8
+markdown
+amaranth[builtin-yosys]

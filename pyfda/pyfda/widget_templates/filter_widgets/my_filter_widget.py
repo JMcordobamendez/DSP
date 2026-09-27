@@ -1,0 +1,247 @@
+# -*- coding: utf-8 -*-
+#
+# This file is part of the pyfda project hosted at https://github.com/chipmuenk/pyfda
+#
+# Copyright © pyfda Project Contributors
+# Licensed under the terms of the MIT License
+# (see file LICENSE in root directory for details)
+
+"""
+Design a simple delay for demonstrating the effect of latency and for debugging
+
+Attention:
+This class is re-instantiated dynamically every time the filter design method
+is selected, calling the __init__ method.
+
+API version info:
+    1.0: initial working release
+"""
+import logging
+
+import numpy as np
+
+from pyfda.filterbroker import fb_get, fb_set
+from pyfda.libs.compat import QWidget, QLabel, QLineEdit, pyqtSignal, QVBoxLayout, QHBoxLayout
+from pyfda.libs.pyfda_qt_lib import popup_warning, emit
+from pyfda.libs.pyfda_num_lib import safe_eval
+from pyfda.libs.pyfda_sig_lib import fil_save, zeros_with_val
+
+logger = logging.getLogger(__name__)
+
+__version__ = "1.0"
+
+classes = {'AllpPZ':'Allpass (P)'} #: Dict containing class name : display name
+
+class AllpPZ(QWidget):
+    """ 
+    Create a widget for an allpass as an example for how to construct
+    widgets in pyfda.
+    """
+
+    FRMT = 'zpk' # output format of delay filter widget
+
+    info = """
+    **Allpass widget**
+
+    allows entering the two **poles** :math:`p`. **zeros** are calculated from the
+    reciprocal values of the poles. There is no minimum algorithm, only the two
+    poles can be entered manually.
+
+    """
+    sig_tx = pyqtSignal(object)
+
+    def __init__(self):
+        super().__init__()
+
+        self.p = [0.5, 0.5j]
+
+        self.ft = 'IIR'
+
+        # the following defines which subwidgets are "a"ctive, "i"nvisible or "d"eactivated
+        self.rt_dicts = ('com',)
+        self.rt_dict = {
+            'com': {'man': {'fo':('d', 'N'),
+                            'msg':('a',
+                                "<span>Enter poles  <b><i>p</i></b> for allpass function,"
+                                "zeros will be calculated.</span>")
+                            },
+                },
+            'ap': {'man':{}
+                    }
+            }
+
+        self.info_doc = []
+        self._construct_ui()
+
+    # -------------------------------------------------------------------------
+    def emit(self, dict_sig: dict) -> None:
+        """
+        Access imported function `emit()` as instance method, passing `self`
+        with its attributes
+        """
+        emit(self, dict_sig)
+
+    #--------------------------------------------------------------------------
+    def _construct_ui(self) -> None:
+        """
+        Create additional subwidget(s) needed for filter design:
+        These subwidgets are instantiated dynamically when needed in
+        select_filter.py
+        """
+        self.lbl_pole1 = QLabel("Pole 1", self)
+        self.lbl_pole1.setObjectName('wdg_lbl_pole1')
+        self.led_pole1 = QLineEdit(self)
+        self.led_pole1.setText(str(self.p[0]))
+        self.led_pole1.setObjectName('wdg_led_pole1')
+        self.led_pole1.setToolTip("Pole 1 for allpass filter")
+
+        self.lbl_pole2 = QLabel("Pole 2", self)
+        self.lbl_pole2.setObjectName('wdg_lbl_pole2')
+        self.led_pole2 = QLineEdit(self)
+        self.led_pole2.setText(str(self.p[1]))
+        self.led_pole2.setObjectName('wdg_led_pole2')
+        self.led_pole2.setToolTip("Pole 2 for allpass filter")
+
+        self.lay_h_win = QHBoxLayout()
+        self.lay_h_win.setObjectName('wdg_layGWin')
+        self.lay_h_win.addWidget(self.lbl_pole1)
+        self.lay_h_win.addWidget(self.led_pole1)
+        self.lay_h_win.addWidget(self.lbl_pole2)
+        self.lay_h_win.addWidget(self.led_pole2)
+        self.lay_h_win.setContentsMargins(0,0,0,0)
+        # Widget containing all subwidgets (cmbBoxes, Labels, lineEdits)
+        self.wdg_fil = QWidget(self)
+        self.wdg_fil.setObjectName('wdg_fil')
+        self.wdg_fil.setLayout(self.lay_h_win)
+
+        #----------------------------------------------------------------------
+        # SIGNALS & SLOTs
+        #----------------------------------------------------------------------
+        self.led_pole1.editingFinished.connect(self._update_ui)
+        self.led_pole2.editingFinished.connect(self._update_ui)
+        # fires when edited line looses focus or when RETURN is pressed
+        #----------------------------------------------------------------------
+
+        self.dict2filter_params() # get initial / last setting from dictionary
+        self._update_ui()
+
+    def _update_ui(self) -> None:
+        """
+        Update UI when line edit field is changed (here, only the text is read
+        and converted to integer) and store parameter settings in filter
+        dictionary
+        """
+        self.p[0] = safe_eval(self.led_pole1.text(), self.p[0], return_type='cmplx')
+        self.led_pole1.setText(str(self.p[0]))
+
+        self.p[1] = safe_eval(self.led_pole2.text(), self.p[1], return_type='cmplx')
+        self.led_pole2.setText(str(self.p[1]))
+
+        fb_set('filter_widgets', 'allpass', {'p1':self.p[0], 'p2':self.p[1]}, new_key = True)
+
+        # sig_tx -> select_filter -> filter_specs
+        self.emit({'filt_changed': 'pole_1_2'})
+
+
+    def dict2filter_params(self) -> None:
+        """
+        Reload parameter(s) from filter dictionary (if they exist) and set
+        corresponding UI elements. dict2filter_params() is called upon initialization
+        and when the filter is loaded from disk.
+        """
+        if 'allpass' in fb_get('filter_widgets'):
+            wdg_fil_par = fb_get('wdg_fil', 'allpass')
+            if 'p1' in wdg_fil_par:
+                self.p1 = wdg_fil_par['p1']
+                self.led_pole1.setText(str(self.p1))
+            if 'p2' in wdg_fil_par:
+                self.p2 = wdg_fil_par['p2']
+                self.led_pole2.setText(str(self.p2))
+
+    def _get_params(self) -> None:
+        """
+        Get parameters needed for filter design from the passed dictionary and
+        translate them to instance parameters, scaling / transforming them if needed.
+        """
+        #self.p1     = fb_get('zpk')[1][0]  # get the first and second pole
+        #self.p2     = fb_get('zpk')[1][1]  # from central filter dect
+        logger.info(fb_get('zpk'))
+
+    def _test_poles(self) -> bool:
+        """
+        Warn the user if one of the poles is outside the unit circle
+        """
+        if abs(self.p[0]) >= 1 or abs(self.p[1])  >=1:
+            return popup_warning(self, self.p[0], "Delay")
+
+        return True
+
+    def _save(self, arg: np.ndarray = None) -> None:
+        """
+        Convert between poles / zeros / gain, filter coefficients (polynomes)
+        and second-order sections and store all available formats in the filter dict.
+        """
+        if arg is None:
+            logger.error("Passed empty filter array, cannot save filter.")
+            return
+        logger.info(arg)
+        fil_save(arg, self.FRMT, __name__)
+
+        fb_set('N', len(self.p))
+
+
+    #--------------------------------------------------------------------------
+    # Filter design routines
+    #--------------------------------------------------------------------------
+    # The method name MUST be "filter_type"+"min_man", e.g. lp_min or bp_man
+
+    def ap_man(self) -> int:
+        """
+        Calculate z =1/p* for a given set of poles p. If p=0, set z=0.
+        The gain factor k is calculated from z and p at z = 1.
+        """
+        self._get_params() # not needed here
+        if not self._test_poles():
+            return -1
+        self.z = [0,0]
+        if self.p[0] != 0:
+            self.z[0] = np.conj(1/self.p[0])
+        if isinstance(self.p[0], complex):
+            pass
+        if self.p[1] != 0:
+            self.z[1] = np.conj(1/self.p[1])
+
+        k = np.abs(np.polyval(np.poly(self.p),1) / np.polyval(np.poly(self.z),1))
+        zpk = np.array([self.z, self.p, zeros_with_val(len(self.z), k)])
+
+        self._save(zpk)
+        return 0
+
+#------------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    # Run module standalone with `python -m pyfda.widget_templates.filter_widgets.my_filter_widget`
+    import sys
+    from pyfda.libs.compat import QApplication, QFrame
+
+    app = QApplication(sys.argv)
+
+    # instantiate filter widget
+    filt = AllpPZ()
+    wdg_allpass = getattr(filt, 'wdg_fil')
+
+    lay_v_dyn_wdg = QVBoxLayout()
+    lay_v_dyn_wdg.addWidget(wdg_allpass, stretch = 1)
+
+    filt.ap_man()  # design an all pass filter with parameters from global dict
+    print(fb_get(filt.FRMT)) # return results in default format
+
+    frm_main = QFrame()
+    frm_main.setFrameStyle(QFrame.StyledPanel|QFrame.Sunken)
+    frm_main.setLayout(lay_v_dyn_wdg)
+
+    form = frm_main
+
+    form.show()
+
+    app.exec_()

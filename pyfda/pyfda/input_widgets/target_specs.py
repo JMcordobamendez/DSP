@@ -1,0 +1,187 @@
+# -*- coding: utf-8 -*-
+#
+# This file is part of the pyfda project hosted at https://github.com/chipmuenk/pyfda
+#
+# Copyright © pyfda Project Contributors
+# Licensed under the terms of the MIT License
+# (see file LICENSE in root directory for details)
+
+"""
+Widget collecting subwidgets for the target filter specifications (currently
+only amplitude and frequency specs.)
+"""
+import sys
+import logging
+
+from pyfda.filterbroker import fb_get
+from pyfda.filter_tree_builder import FilterTreeBuilder as FTB
+from pyfda.libs.compat import (
+    QWidget, QLabel, QFont, QFrame, pyqtSignal, Qt, QHBoxLayout, QVBoxLayout)
+from pyfda.libs.pyfda_text_lib import first_item
+from pyfda.libs.pyfda_qt_lib import emit
+from pyfda.input_widgets import amplitude_specs, freq_specs
+from pyfda.pyfda_rc import params
+
+logger = logging.getLogger(__name__)
+
+
+class TargetSpecs(QWidget):
+    """
+    Build and update widget for entering the target specifications (frequencies
+    and amplitudes) like f_sb, f_pb, a_sb, etc.
+    """
+    # class variables (shared between instances if more than one exists)
+    sig_rx = pyqtSignal(object)  # incoming
+    sig_tx = pyqtSignal(object)  # outgoing
+    sig_tx_local = pyqtSignal(object)  # outgoing to lower hierarchies
+
+    def __init__(self, title: str = "Target Specs", objectName: str = "") -> None:
+        super().__init__()
+
+        self.title = title
+        self.setObjectName(objectName)
+
+        self._construct_ui()
+
+    # -------------------------------------------------------------------------
+    def emit(self, dict_sig: dict, sig_name: str = ""):
+        """
+        Access imported function `emit()` as instance method, passing `self`
+        with its attributes
+        """
+        emit(self, dict_sig, sig_name)
+
+    #--------------------------------------------------------------------------
+    def process_sig_rx(self, dict_sig: dict | None = None) -> None:
+        """
+        Process signals coming in via subwidgets and sig_rx
+        """
+        logger.debug("SIG_RX: %s", first_item(dict_sig))
+        if dict_sig['id'] == id(self):
+            logger.warning("Stopped infinite loop.")
+            return
+        if 'view_changed' in dict_sig and dict_sig['view_changed'] == 'f_S':
+            # update target frequencies with new f_S
+            self.emit(dict_sig, sig_name='sig_tx_local')
+        elif 'data_changed' in dict_sig and dict_sig['data_changed'] == 'filter_loaded':
+            self.emit(dict_sig, sig_name='sig_tx_local')
+        else:
+            return
+
+    # --------------------------------------------------------------------------
+    def _construct_ui(self) -> None:
+        """
+        Construct user interface
+        """
+        # subwidget for Frequency Specs
+        self.f_specs = freq_specs.FreqSpecs(title="Frequency",
+                                            objectName="freq_specs_targ")
+        # subwidget for Amplitude Specs
+        self.a_specs = amplitude_specs.AmplitudeSpecs(title="Ripple",
+                                                      objectName="amplitude_specs_targ")
+        self.a_specs.setVisible(True)
+        ###########
+        # LAYOUT
+        ###########
+        bfont = QFont()
+        bfont.setBold(True)
+        lbl_title = QLabel(self)  # field for widget title
+        lbl_title.setText(self.title)
+        lbl_title.setFont(bfont)
+    #        lbl_title.setContentsMargins(2,2,2,2)
+
+        lay_h_title = QHBoxLayout()
+        lay_h_title.addWidget(lbl_title)
+        lay_h_title.setAlignment(Qt.AlignHCenter)
+        lay_h_specs = QHBoxLayout()
+        lay_h_specs.setAlignment(Qt.AlignTop)
+        lay_h_specs.addWidget(self.f_specs)  # frequency specs
+        lay_h_specs.addWidget(self.a_specs)  # ampltitude specs
+
+        lay_v_specs = QVBoxLayout()
+        lay_v_specs.addLayout(lay_h_title)
+        lay_v_specs.addLayout(lay_h_specs)
+        lay_v_specs.setContentsMargins(0, 6, 0, 0)  # (left, top, right, bottom)
+
+        # This is the top level widget, encompassing the other widgets
+        frm_main = QFrame(self)
+        frm_main.setLayout(lay_v_specs)
+
+        self.lay_v_main = QVBoxLayout()  # Widget main layout
+        self.lay_v_main.addWidget(frm_main)
+        self.lay_v_main.setContentsMargins(*params['wdg_margins'])
+
+        self.setLayout(self.lay_v_main)
+
+        # ----------------------------------------------------------------------
+        # GLOBAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        # process incoming global signals
+        self.sig_rx.connect(self.process_sig_rx)
+        # connect signals from f_specs and a_specs subwidget to higher hierarchies
+        self.f_specs.sig_tx.connect(self.sig_tx)
+        self.a_specs.sig_tx.connect(self.sig_tx)
+        # pass on prefiltered received signals
+        self.sig_tx_local.connect(self.f_specs.sig_rx)
+        self.sig_tx_local.connect(self.a_specs.sig_rx)
+
+        self.update_ui()  # first time initialization
+
+    # --------------------------------------------------------------------------
+    def update_ui(self, new_labels: list[str] | None = None) -> None:
+        """
+        Called when a new filter design algorithm has been selected
+        - Pass new frequency and amplitude labels to the amplitude and frequency
+          spec widgets. The first element of the 'amp' and the 'freq' tuple
+          is the state with 'u' for 'unused' and 'd' for disabled
+
+        - The `filt_changed` signal is emitted already by `select_filter.py`
+        """
+        if new_labels is None:
+            self.f_specs.hide()
+            self.a_specs.hide()
+            return
+
+        if ('frq' in new_labels and len(new_labels['frq']) > 1 and
+                new_labels['frq'][0] != 'i'):
+            self.f_specs.show()
+            self.f_specs.setEnabled(new_labels['frq'][0] != 'd')
+            self.f_specs.update_ui(new_labels=new_labels['frq'])
+        else:
+            self.f_specs.hide()
+
+        if ('amp' in new_labels and len(new_labels['amp']) > 1 and
+                new_labels['amp'][0] != 'i'):
+            self.a_specs.show()
+            self.a_specs.setEnabled(new_labels['amp'][0] != 'd')
+            self.a_specs.update_ui(new_labels=new_labels['amp'])
+        else:
+            self.a_specs.hide()
+
+# ------------------------------------------------------------------------------
+if __name__ == '__main__':
+    # Run widget standalone with `python -m pyfda.input_widgets.target_specs`
+    from pyfda.libs.compat import QApplication
+    from pyfda.pyfda_rc import QSS
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(QSS.QSS_RC)
+
+    # Read freq / amp / weight labels for current filter design
+    rt = fb_get('rt')
+    ft = fb_get('ft')
+    fc = 'Cheby1'  # fb_get('fc')
+
+    if 'min' in FTB.fil_tree[rt][ft][fc]:
+        # extract target parameters from filter tree
+        print(FTB.fil_tree[rt][ft][fc]['min']['tspecs'])
+        target_params = FTB.fil_tree[rt][ft][fc]['min']['tspecs'][1]
+    else:
+        target_params = {}
+
+    mainw = TargetSpecs(title="Test Specs")
+    mainw.update_ui(target_params)
+
+    app.setActiveWindow(mainw)
+    mainw.show()
+    sys.exit(app.exec_())

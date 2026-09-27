@@ -1,0 +1,28 @@
+# Add non-Python files to pip package and remove some
+# fluff
+#
+# ALWAYS DELETE pyfda.egg-info AFTER MODIFYING THIS FILE!
+
+# Copy fixpoint *.png files to the corresponding subdirs
+recursive-include pyfda/fixpoint_widgets *.png
+
+# Configuration templates for pyfda and for logging
+include pyfda/libs/pyfda_*.conf
+
+# Include icons
+recursive-include pyfda/images *
+
+# Include documentation
+include *.md
+include pyfda/*.md
+
+include requirements.txt
+include pyfdax.spec
+include pyfda/*.qrc
+
+# exclude byte-code files
+global-exclude *.py[cod]
+prune bak
+prune pyfda/tests
+prune docs
+prune recipe
