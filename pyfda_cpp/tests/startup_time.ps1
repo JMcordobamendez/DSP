@@ -1,31 +1,48 @@
 # Start time of pyfda_cpp.exe and pyfdax.exe (PyInstaller, PR #4) on Windows: time from the
 # start of the process until the main window exists and until it is ready for input
-# (WaitForInputIdle). The first run after the download is "cold", the following ones "warm".
+# (its event loop answers a message). The first run after the download is "cold", the following ones "warm".
 param([string]$Cpp, [string]$Py, [int]$Runs = 10)
 
-function Measure-Start([string]$exe, [string]$name, [string[]]$argv) {
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class W32 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l, uint flags, uint ms, out IntPtr res);
+}
+"@
+
+# the main window is found by its title (pyfdax.exe also has a console window)
+function Measure-Start([string]$exe, [string]$name, [string]$title, [string[]]$argv) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     if ($argv) { $p = Start-Process -FilePath $exe -ArgumentList $argv -PassThru } else { $p = Start-Process -FilePath $exe -PassThru }
-    $win = $null
+    $h = [IntPtr]::Zero
     while ($sw.Elapsed.TotalSeconds -lt 120) {
-        # PyInstaller onefile: the window belongs to a child process with the same name
-        $win = Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-        if ($win) { break }
-        Start-Sleep -Milliseconds 10
+        $h = [W32]::FindWindow($null, $title)
+        if ($h -ne [IntPtr]::Zero -and [W32]::IsWindowVisible($h)) { break }
+        Start-Sleep -Milliseconds 5
     }
     $t_win = $sw.Elapsed.TotalSeconds
-    $t_idle = [double]::NaN
-    if ($win) { [void]$win.WaitForInputIdle(60000); $t_idle = $sw.Elapsed.TotalSeconds }
+    $t_ready = [double]::NaN
+    $found = $h -ne [IntPtr]::Zero
+    if ($found) {
+        # WM_NULL returns once the event loop of the window processes messages
+        $r = [IntPtr]::Zero
+        [void][W32]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 0, 60000, [ref]$r)
+        $t_ready = $sw.Elapsed.TotalSeconds
+    }
     Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Milliseconds 500
-    return [pscustomobject]@{ window = $t_win; ready = $t_idle; found = [bool]$win }
+    Start-Sleep -Milliseconds 1000
+    return [pscustomobject]@{ window = $t_win; ready = $t_ready; found = $found }
 }
 
 $cfg = Join-Path $env:RUNNER_TEMP 'pyfda_cpp_cfg'
 $rows = @()
-foreach ($app in @(@{ n = 'pyfda_cpp'; exe = $Cpp; a = @('--config-dir', $cfg) }, @{ n = 'pyfdax'; exe = $Py; a = $null })) {
+foreach ($app in @(@{ n = 'pyfda_cpp'; exe = $Cpp; t = 'pyfda C++ - Python Filter Design Analysis Tool'; a = @('--config-dir', $cfg) },
+                   @{ n = 'pyfdax'; exe = $Py; t = 'pyfda - Python Filter Design and Analysis'; a = $null })) {
     for ($i = 0; $i -le $Runs; $i++) {
-        $r = Measure-Start $app.exe $app.n $app.a
+        $r = Measure-Start $app.exe $app.n $app.t $app.a
         $rows += [pscustomobject]@{ app = $app.n; run = $(if ($i -eq 0) { 'cold' } else { "warm $i" }); window_s = [math]::Round($r.window, 3); ready_s = [math]::Round($r.ready, 3); found = $r.found }
     }
 }
