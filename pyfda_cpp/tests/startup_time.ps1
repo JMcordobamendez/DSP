@@ -5,11 +5,32 @@ param([string]$Cpp, [string]$Py, [int]$Runs = 10)
 
 Add-Type @"
 using System;
+using System.Text;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 public static class W32 {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l, uint flags, uint ms, out IntPtr res);
+    // visible top level window whose title contains `part`
+    public static IntPtr Find(string part) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((h, l) => {
+            var sb = new StringBuilder(512);
+            GetWindowText(h, sb, 512);
+            if (IsWindowVisible(h) && sb.ToString().Contains(part)) { found = h; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+    public static string Titles() {
+        var t = new List<string>();
+        EnumWindows((h, l) => { var sb = new StringBuilder(512); GetWindowText(h, sb, 512);
+                                if (IsWindowVisible(h) && sb.Length > 0) t.Add(sb.ToString()); return true; }, IntPtr.Zero);
+        return string.Join(" | ", t);
+    }
 }
 "@
 
@@ -18,9 +39,9 @@ function Measure-Start([string]$exe, [string]$name, [string]$title, [string[]]$a
     $sw = [Diagnostics.Stopwatch]::StartNew()
     if ($argv) { $p = Start-Process -FilePath $exe -ArgumentList $argv -PassThru } else { $p = Start-Process -FilePath $exe -PassThru }
     $h = [IntPtr]::Zero
-    while ($sw.Elapsed.TotalSeconds -lt 120) {
-        $h = [W32]::FindWindow($null, $title)
-        if ($h -ne [IntPtr]::Zero -and [W32]::IsWindowVisible($h)) { break }
+    while ($sw.Elapsed.TotalSeconds -lt 60) {
+        $h = [W32]::Find($title)
+        if ($h -ne [IntPtr]::Zero) { break }
         Start-Sleep -Milliseconds 5
     }
     $t_win = $sw.Elapsed.TotalSeconds
@@ -31,6 +52,8 @@ function Measure-Start([string]$exe, [string]$name, [string]$title, [string[]]$a
         $r = [IntPtr]::Zero
         [void][W32]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 0, 60000, [ref]$r)
         $t_ready = $sw.Elapsed.TotalSeconds
+    } else {
+        Write-Host "not found, visible windows: $([W32]::Titles())"
     }
     Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Milliseconds 1000
@@ -39,10 +62,11 @@ function Measure-Start([string]$exe, [string]$name, [string]$title, [string[]]$a
 
 $cfg = Join-Path $env:RUNNER_TEMP 'pyfda_cpp_cfg'
 $rows = @()
-foreach ($app in @(@{ n = 'pyfda_cpp'; exe = $Cpp; t = 'pyfda C++ - Python Filter Design Analysis Tool'; a = @('--config-dir', $cfg) },
-                   @{ n = 'pyfdax'; exe = $Py; t = 'pyfda - Python Filter Design and Analysis'; a = $null })) {
+foreach ($app in @(@{ n = 'pyfda_cpp'; exe = $Cpp; t = 'Filter Design Analysis Tool'; a = @('--config-dir', $cfg) },
+                   @{ n = 'pyfdax'; exe = $Py; t = 'Filter Design and Analysis'; a = $null })) {
     for ($i = 0; $i -le $Runs; $i++) {
         $r = Measure-Start $app.exe $app.n $app.t $app.a
+        Write-Host ("{0} run {1}: window {2:N3} s, ready {3:N3} s, found {4}" -f $app.n, $i, $r.window, $r.ready, $r.found)
         $rows += [pscustomobject]@{ app = $app.n; run = $(if ($i -eq 0) { 'cold' } else { "warm $i" }); window_s = [math]::Round($r.window, 3); ready_s = [math]::Round($r.ready, 3); found = $r.found }
     }
 }
