@@ -16,6 +16,6 @@ filt = (0.5/0.537)*np.array([
   -0.010688729607911805,
   -0.02062630863958946
 ])
-DSP = DSP(data = y, fs = 1000, filt = 'Yes', num = filt)
-DSP.calculate()
-DSP.plot()
+analysis = DSP(data = y, fs = 1000, filt = True, num = filt)
+analysis.calculate()
+analysis.plot()
